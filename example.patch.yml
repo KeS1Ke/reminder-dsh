@@ -1,0 +1,7 @@
+# dsh-taskbar-reminder 安装示例
+# 把下面这段追加到 <DSH_HOME>/profiles/<profile>/cordis.patch.yml 的顶层数组中
+# (<DSH_HOME> 默认为 %USERPROFILE%/.dsh，Web 端 profile 通常为 web)。
+
+- insert:
+    - id: dsh-taskbar-reminder
+      name: 'dsh-taskbar-reminder'
