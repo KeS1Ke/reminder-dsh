@@ -1,0 +1,77 @@
+import { spawn } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+
+const script = fileURLToPath(new URL('./flash.ps1', import.meta.url))
+
+/** Coalesce taskbar attention for the same app; stop gracefully to clear native flashing. */
+export function createTaskbarNotifier({ isEnabled, getWindowTitle }, launch = spawn) {
+  let active, disposed = false
+
+  function send(state, message) {
+    if (!state.child.stdin.destroyed) state.child.stdin.write(JSON.stringify(message) + '\n', 'utf8')
+  }
+  function stop(state = active) {
+    if (!state || state.stopping) return
+    state.stopping = true
+    send(state, { type: 'stop' })
+    state.killTimer = setTimeout(() => state.child.kill(), 2000)
+  }
+  function start() {
+    const child = launch('pwsh.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+      '-File', script], { windowsHide: true, shell: false, stdio: ['pipe', 'ignore', 'pipe'] })
+    const state = { child, subscribers: new Set(), stopping: false }
+    let resolve, reject, stderr = '', error, finished = false
+    state.done = new Promise((yes, no) => { resolve = yes; reject = no })
+    state.done.catch(() => {})
+    const finish = failure => {
+      if (finished) return
+      finished = true
+      clearTimeout(state.timeout)
+      clearTimeout(state.killTimer)
+      if (active === state) active = undefined
+      if (failure && !state.stopping && !disposed) reject(failure)
+      else resolve()
+    }
+    child.stderr.setEncoding('utf8')
+    child.stderr.on('data', value => { stderr = (stderr + value).slice(-2048) })
+    child.on('error', failure => finish(failure.code === 'ENOENT'
+      ? new Error('找不到 pwsh.exe，请安装 PowerShell 7 并重启 DSH。') : failure))
+    child.on('close', code => finish(error ?? (code === 0 ? undefined : new Error(`任务栏提醒失败：${stderr.trim() || code}`))))
+    child.stdin.on('error', failure => { error = failure; child.kill() })
+    state.armDeadline = () => {
+      clearTimeout(state.timeout)
+      state.timeout = setTimeout(() => { error = new Error('任务栏提醒进程超时'); child.kill() }, 30_000)
+    }
+    state.armDeadline()
+    send(state, { hostPid: process.pid, windowTitle: getWindowTitle(), durationSeconds: 10 })
+    return state
+  }
+  function subscribe(state, signal) {
+    return new Promise((resolve, reject) => {
+      const subscriber = {}
+      state.subscribers.add(subscriber)
+      const abort = () => {
+        state.subscribers.delete(subscriber)
+        resolve()
+        if (!state.subscribers.size) stop(state)
+      }
+      signal?.addEventListener('abort', abort, { once: true })
+      state.done.then(resolve, reject).finally(() => {
+        state.subscribers.delete(subscriber)
+        signal?.removeEventListener('abort', abort)
+      })
+    })
+  }
+  function notify({ signal } = {}) {
+    if (disposed || !isEnabled() || signal?.aborted) return Promise.resolve()
+    if (active?.stopping) return active.done.catch(() => {}).then(() => notify({ signal }))
+    if (active) { active.armDeadline(); send(active, { type: 'refresh' }) }
+    else active = start()
+    return subscribe(active, signal)
+  }
+  return {
+    notify,
+    stop: () => stop(),
+    dispose() { disposed = true; stop() },
+  }
+}

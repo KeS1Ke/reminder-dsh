@@ -1,54 +1,77 @@
 {
   "name": "@kesike/dsh-taskbar-reminder",
-  "displayName": "dsh-taskbar-reminder",
-  "version": "0.0.1",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness Windows taskbar flashing and popup quick-reply reminders",
   "type": "module",
-  "description": "DSH(DeepSeek Harness) 任务栏提醒插件骨架。",
-  "license": "MIT",
-  "keywords": [
-    "dsh",
-    "deepseek-harness",
-    "dsh-plugin",
-    "plugin",
-    "web",
-    "taskbar",
-    "reminder"
-  ],
-  "homepage": "https://github.com/KeS1Ke/dsh-taskbar-reminder#readme",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/KeS1Ke/dsh-taskbar-reminder.git"
-  },
-  "bugs": {
-    "url": "https://github.com/KeS1Ke/dsh-taskbar-reminder/issues"
-  },
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",
     "./client": "./lib/client.js",
-    "./cordis.patch.yml": "./cordis.patch.yml",
-    "./package.json": "./package.json"
-  },
-  "engines": {
-    "node": ">=22.19.0 || >=24.0.0"
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./cordis.patch.yml"
   },
   "files": [
+    "src",
+    "assets",
+    "scripts",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
     "lib",
-    "cordis.patch.yml"
+    "README.zh-CN.md",
+    "example.patch.yml"
   ],
-  "publishConfig": {
-    "access": "public",
-    "registry": "https://registry.npmjs.org/"
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "test:popup": "node scripts/test-popup.js",
+    "test:settings-ui": "node test/settings.browser.js",
+    "test:taskbar": "node scripts/test-taskbar.js"
+  },
+  "engines": {
+    "node": ">=24.9.0",
+    "dsh": ">=0.2.2-rc.1 <0.3.0"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "3.19.0"
   },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
     },
     "client": {
+      "platform": "web",
       "inject": [
-        "@deepseek-ai/dsh-client-runtime"
-      ],
-      "platform": "web"
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-settings-general",
+        "@deepseek-ai/dsh-client-locale"
+      ]
     }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KeS1Ke/reminder-dsh.git"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "windows",
+    "notification"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.1.0",
+    "@deepseek-ai/cordis-plugin-loader": "1.1.0",
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.1",
+    "playwright-core": "1.65.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-llm": ">=0.2.2-rc.1 <0.3.0"
+  },
+  "displayName": "DSH reminders",
+  "homepage": "https://github.com/KeS1Ke/reminder-dsh#readme",
+  "bugs": {
+    "url": "https://github.com/KeS1Ke/reminder-dsh/issues"
   }
 }
