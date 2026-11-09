@@ -45,6 +45,7 @@ test('allow and reject settle only the exact pending request, even for identical
   await flush()
   assert.equal(h.notifications.length, 2)
   assert.match(h.notifications[0].title, /bash/)
+  assert.equal(h.notifications[0].sessionId, 'original')
   h.notifications[1].onDecision('rejected')
   assert.equal(await second, 'rejected')
   assert.equal(h.pendingRemoteEvents.size, 1)

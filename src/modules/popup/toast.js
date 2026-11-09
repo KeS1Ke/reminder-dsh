@@ -54,15 +54,22 @@ export function createWindowsToast(config, launch = execFile) {
   }
 
   return {
-    async notify({ title = config.title, message = config.message, signal, onReply, onDecision } = {}) {
+    async notify({ title = config.title, message = config.message, signal, onReply, onDecision, onOpen } = {}) {
       signal = signal ? AbortSignal.any([signal, lifetime.signal]) : lifetime.signal
       if (signal.aborted) return
-      if (onReply || onDecision) await startActivator()
+      if (onReply || onDecision || onOpen) await startActivator()
       if (signal.aborted) return
       const payload = { title, message }
       const routes = []
       let sent = false
       try {
+        if (onOpen) {
+          const open = await replies.registerOpen(onOpen, signal)
+          if (!open) return
+          routes.push(open)
+          // The body click is a background activation: it notifies this process, then opens the app.
+          payload.open = open.argument
+        }
         if (onDecision) {
           payload.approval = []
           for (const [label, outcome] of [['允许', 'allowed-once'], ['拒绝', 'rejected']]) {

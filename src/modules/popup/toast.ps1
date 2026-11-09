@@ -34,7 +34,12 @@ $xml.LoadXml($(if ($message) {
 } else {
   '<toast><visual><binding template="ToastGeneric"><text hint-maxLines="1"/></binding></visual></toast>'
 }))
-if ($desktop) {
+# A body click that must open a specific session is a background activation: our activator notifies the
+# backend (which navigates the GUI) and then opens DSH itself. Without a session route, keep the protocol.
+if ($payload.open) {
+  $xml.DocumentElement.SetAttribute('activationType', 'background')
+  $xml.DocumentElement.SetAttribute('launch', [string]$payload.open)
+} elseif ($desktop) {
   $xml.DocumentElement.SetAttribute('activationType', 'protocol')
   $xml.DocumentElement.SetAttribute('launch', 'dsh://open')
 }

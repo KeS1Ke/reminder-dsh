@@ -2,6 +2,7 @@ import Schema from '@deepseek-ai/schemastery'
 import { createWindowsToast } from './toast.js'
 import { summarizeCompletion } from './summary.js'
 import { createReminderQueue } from './queue.js'
+import { createSessionOpenRequests } from './open.js'
 
 export const Config = Schema.object({
   enabled: Schema.boolean().default(true).description('启用 Windows 完成和审批通知').volatile(),
@@ -16,10 +17,58 @@ export const Config = Schema.object({
   summaryTimeoutSeconds: Schema.number().min(1).max(60).step(1).default(15).description('AI 总结超时秒数'),
 })
 
+/**
+ * The GUI long-polls this route and navigates to the session a clicked toast belongs to.
+ * Registered only where the host owns a web server and connection trust (the web/desktop app).
+ */
+function attachSessionOpenRoute(ctx, requests, logger) {
+  ctx.inject(['webServer', 'connection'], scope => {
+    const webServer = scope.get('webServer')
+    const connection = scope.get('connection')
+    if (!webServer || !connection) return
+    scope.effect(() => {
+      try {
+        return webServer.register({
+          kind: 'exact',
+          path: '/reminder-dsh/session-open',
+          handler: async (request, response) => {
+            if (typeof connection.requestRejection === 'function' && connection.requestRejection(request) !== undefined) {
+              response.writeHead(403)
+              response.end()
+              return
+            }
+            if (request.method !== 'GET') {
+              response.writeHead(405)
+              response.end()
+              return
+            }
+            const sessionId = await requests.take()
+            if (sessionId === undefined) {
+              response.writeHead(204)
+              response.end()
+              return
+            }
+            response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
+            response.end(JSON.stringify({ sessionId }))
+          },
+        })
+      } catch (error) {
+        // Session jumps are a convenience: never let a route conflict break reminders.
+        logger.warn(`会话跳转路由不可用：${error instanceof Error ? error.message : String(error)}`)
+        return () => {}
+      }
+    }, 'reminder-dsh: session open route')
+  })
+}
+
 /** Keep the popup configuration key for existing profiles. */
 export function createPopupModule(ctx, config, notifier = createWindowsToast(config)) {
   const logger = ctx.logger('reminder-popup')
   let approvals = new AbortController()
+  const opens = createSessionOpenRequests()
+  const openOf = options => options.sessionId
+    ? () => opens.request(options.sessionId)
+    : undefined
   const queue = createReminderQueue({
     enabled: config.enabled.get(), intervalSeconds: config.durationSeconds.get(),
     prepare: async options => ({
@@ -30,14 +79,15 @@ export function createPopupModule(ctx, config, notifier = createWindowsToast(con
         })
         : '',
     }),
-    show: options => notifier.notify(options),
+    show: options => notifier.notify({ ...options, onOpen: openOf(options) }),
   })
+  attachSessionOpenRoute(ctx, opens, logger)
   return {
     notify: options => queue.enqueue(options),
     notifyApproval(options) {
       if (!config.enabled.get()) return
       const signal = AbortSignal.any([options.signal, approvals.signal])
-      return notifier.notify({ ...options, signal, onDecision(outcome) {
+      return notifier.notify({ ...options, signal, onOpen: openOf(options), onDecision(outcome) {
         signal.throwIfAborted()
         return options.onDecision(outcome)
       } })

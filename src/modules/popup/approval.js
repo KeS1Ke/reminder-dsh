@@ -37,6 +37,7 @@ export function attachApprovalNotifications(ctx, notify) {
       const message = typeof description === 'string' && description.trim()
         ? excerpt(description, 220) : '点击通知查看请求详情。'
       void Promise.resolve().then(() => notify({
+        sessionId: session.id,
         title: `需要审批 · ${excerpt(request.toolName, 64)}`,
         message, signal,
         onDecision(outcome) {

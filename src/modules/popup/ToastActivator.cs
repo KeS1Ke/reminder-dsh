@@ -44,9 +44,21 @@ namespace DshReminder
         public int Activate(string appId, string arguments, NotificationInput[] input, uint count)
         {
             if (appId != "KeS1Ke.DSH" || String.IsNullOrEmpty(arguments)) return 0;
-            var route = Regex.Match(arguments, @"\A([a-f0-9]{32}):([a-f0-9]{32})(:decision)?\z");
+            var route = Regex.Match(arguments, @"\A([a-f0-9]{32}):([a-f0-9]{32})(:decision|:open)?\z");
             if (!route.Success) return 0;
-            bool approval = route.Groups[3].Success;
+            var kind = route.Groups[3].Value;
+            if (kind == ":open")
+            {
+                // Navigate the backend first (it answers the GUI long poll), then open the app either way.
+                try { Deliver(route.Groups[1].Value, route.Groups[2].Value, null); }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+                catch (TimeoutException) { }
+                catch (AggregateException) { }
+                OpenApp();
+                return 0;
+            }
+            bool approval = kind == ":decision";
             bool delivered;
             try
             {
@@ -70,14 +82,28 @@ namespace DshReminder
             return 0;
         }
 
+        private static void OpenApp()
+        {
+            try
+            {
+                using (Process.Start(new ProcessStartInfo("dsh://open") { UseShellExecute = true })) { }
+            }
+            catch
+            {
+                // The protocol may be unregistered (web-only profile); the GUI long poll already ran.
+            }
+        }
+
         private static bool Deliver(string pipeId, string token, string text)
         {
-            if (String.IsNullOrWhiteSpace(text) || text.Length > 8000) return false;
+            // A null text marks a body click: it carries the route token only.
+            if (text != null && (String.IsNullOrWhiteSpace(text) || text.Length > 8000)) return false;
             using (var pipe = new NamedPipeClientStream(".", "kesike-dsh-reply-" + pipeId,
                 PipeDirection.InOut, PipeOptions.Asynchronous, TokenImpersonationLevel.Identification))
             {
                 pipe.Connect(2000);
-                var message = Encoding.ASCII.GetBytes(token + " " + Convert.ToBase64String(Encoding.UTF8.GetBytes(text)) + "\n");
+                var body = text == null ? token + "\n" : token + " " + Convert.ToBase64String(Encoding.UTF8.GetBytes(text)) + "\n";
+                var message = Encoding.ASCII.GetBytes(body);
                 if (!pipe.WriteAsync(message, 0, message.Length).Wait(2000)) return false;
                 using (var reader = new StreamReader(pipe, Encoding.ASCII))
                 {

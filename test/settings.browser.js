@@ -13,7 +13,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 800, height: 580 } })
   const errors = []
   page.on('pageerror', error => errors.push(error.message))
-  await page.setContent('<html lang="zh"><body style="font-family:system-ui;margin:40px"><h2>Windows 提醒设置</h2><div id="root"></div></body></html>')
+  await page.setContent('<html lang="zh"><head><base href="http://test.local/"></head><body style="font-family:system-ui;margin:40px"><h2>Windows 提醒设置</h2><div id="root"></div></body></html>')
   for (const script of ['react/umd/react.development.js', 'react-dom/umd/react-dom.development.js']) {
     await page.addScriptTag({ path: fileURLToPath(new URL('../node_modules/' + script, import.meta.url)) })
   }
@@ -27,6 +27,16 @@ try {
     let snapshot = { status: 'ready', writable: true, value: { popup: { enabled: true, durationSeconds: 10, showSummary: true }, taskbar: { enabled: false, windowTitle: '' } } }
     window.writes = []
     window.failNext = false
+    window.opened = []
+    window.fetchUrls = []
+    let served = false
+    window.fetch = url => {
+      window.fetchUrls.push(String(url))
+      if (served) return new Promise(() => {})
+      served = true
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ sessionId: 'session-jump' }) })
+    }
+    const uiWorkspace = { openSession: sessionId => window.opened.push(sessionId) }
     window.publish = value => {
       snapshot = { ...snapshot, value: { popup: { ...snapshot.value.popup, ...value.popup }, taskbar: { ...snapshot.value.taskbar, ...value.taskbar } } }
       for (const listener of listeners) listener()
@@ -55,6 +65,10 @@ try {
     let dictionary
     plugin.apply({
       effect: callback => callback(),
+      inject: (names, callback) => {
+        if (names.includes('uiWorkspace')) callback({ get: name => name === 'uiWorkspace' ? uiWorkspace : undefined })
+        return () => {}
+      },
       locale: {
         register: (_name, values) => { dictionary = values.zh; return () => {} },
         bind: () => key => dictionary[key],
@@ -130,6 +144,9 @@ try {
   assert.equal(await toggle.isChecked(), true)
   assert.equal(await summary.isChecked(), true)
   assert.equal(await taskbar.isChecked(), true)
+  await page.waitForFunction(() => window.opened.length > 0)
+  assert.deepEqual(await page.evaluate(() => window.opened), ['session-jump'])
+  assert.match(await page.evaluate(() => window.fetchUrls[0]), /reminder-dsh\/session-open$/)
   assert.deepEqual(errors, [])
-  console.log('Settings browser checks passed: bell icon, summary toggle, interval save/validation, refused write, external live update.')
+  console.log('Settings browser checks passed: bell icon, summary toggle, interval save/validation, refused write, external live update, toast session jump.')
 } finally { await browser.close() }

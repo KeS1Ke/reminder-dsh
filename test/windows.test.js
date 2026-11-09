@@ -91,6 +91,51 @@ test('Windows shows only the session title when the summary is hidden', { skip: 
   assert.equal((result.stdout.match(/<text\b/g) ?? []).length, 1)
 })
 
+test('Windows routes a body click to the session route instead of the DSH protocol', { skip: process.platform !== 'win32' }, () => {
+  const script = fileURLToPath(new URL('../src/modules/popup/toast.ps1', import.meta.url))
+  const route = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:open'
+  const result = spawnSync('powershell.exe', [
+    '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, '-ValidateOnly',
+  ], { input: JSON.stringify({ title: '会话标题', message: '', open: route }) + '\n', encoding: 'utf8', timeout: 15_000, windowsHide: true })
+  assert.equal(result.status, 0, result.error?.message ?? result.stderr)
+  assert.match(result.stdout, /activationType="background"/)
+  assert.ok(result.stdout.includes(`launch="${route}"`))
+  assert.doesNotMatch(result.stdout, /dsh:\/\/open/)
+})
+
+test('toast body activation routes every click to the captured session', { skip: process.platform !== 'win32' }, async t => {
+  const replies = createToastReplies()
+  t.after(() => replies.dispose())
+  const opened = []
+  const route = await replies.registerOpen(() => { opened.push('open') })
+  assert.match(route.argument, /^[a-f0-9]{32}:[a-f0-9]{32}:open$/)
+  const [pipeId, token] = route.argument.split(':')
+
+  function click() {
+    return new Promise((resolve, reject) => {
+      const socket = createConnection(`\\\\.\\pipe\\kesike-dsh-reply-${pipeId}`)
+      let acknowledgment = ''
+      socket.setTimeout(2000, () => socket.destroy(new Error('Body-click acknowledgment timed out')))
+      socket.setEncoding('ascii').on('data', chunk => { acknowledgment += chunk })
+      socket.on('error', reject).on('end', () => resolve(acknowledgment.trim()))
+      socket.on('connect', () => socket.write(`${token}\n`))
+    })
+  }
+
+  assert.equal(await click(), 'ok')
+  assert.equal(await click(), 'ok')
+  assert.deepEqual(opened, ['open', 'open'])
+  route.release()
+  assert.equal(await click(), 'failed')
+})
+
+test('the toast activator C# compiles under Windows PowerShell', { skip: process.platform !== 'win32' }, () => {
+  const path = fileURLToPath(new URL('../src/modules/popup/ToastActivator.cs', import.meta.url))
+  const result = spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
+    `Add-Type -Path '${path.replace(/'/g, "''")}'`], { encoding: 'utf8', timeout: 30_000, windowsHide: true })
+  assert.equal(result.status, 0, result.error?.message ?? result.stderr)
+})
+
 test('Windows renders distinct native approval actions without a text input', { skip: process.platform !== 'win32' }, () => {
   const script = fileURLToPath(new URL('../src/modules/popup/toast.ps1', import.meta.url))
   const input = { ...config, approval: [{ label: '允许', argument: 'allow-route' }, { label: '拒绝', argument: 'reject-route' }] }

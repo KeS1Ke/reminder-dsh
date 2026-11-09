@@ -28,7 +28,9 @@ Versions before 0.2.0 shipped as package `@kesike/dsh-taskbar-reminder` with the
 
 Open **Settings → Notifications** from the settings sidebar. Windows system notifications default on. The taskbar completion badge has its own switch and defaults off.
 
-The notification interval defaults to **10 seconds**, configurable from **1–300 seconds**. It controls the minimum time between consecutive completion notifications. Windows controls banner duration and delivery through its notification settings for **DeepSeek Harness**. Clicking the notification body opens or focuses DSH Desktop when the `dsh://` protocol is registered.
+The notification interval defaults to **10 seconds**, configurable from **1–300 seconds**. It controls the minimum time between consecutive completion notifications. Windows controls banner duration and delivery through its notification settings for **DeepSeek Harness**.
+
+Clicking the notification body switches back to DSH **and opens the session that notification belongs to**, instead of whichever session is currently shown. The click is a local background activation: the plugin posts the session id to the backend, the GUI picks it up through a host long poll and calls `uiWorkspace.openSession`, then the activator launches `dsh://open` to focus the desktop window. The jump therefore requires the reminder backend to be running (same as the reply and approval buttons); when the backend has exited, clicking does not open DSH.
 
 **Show task summary in notifications** defaults on: the notification shows the session title plus a task summary compressed to three lines. Turning it off shows only the session title and skips the summary model request. The session title comes from DSH's session-title service; when that service is unavailable the configured title is used.
 
@@ -45,7 +47,7 @@ Notification summaries make one auxiliary model request using the session's exis
 ## Modules and configuration
 
 - `src/modules/taskbar/`: native taskbar completion badge, target selection and process lifecycle.
-- `src/modules/popup/`: summaries, submission queue and native Windows toast delivery.
+- `src/modules/popup/`: summaries, submission queue, session-open mailbox and native Windows toast delivery.
 - `src/reminder.js`: shared main-session completion detection and session-title lookup.
 - `lib/client.js`: settings for both modules, using DSH ConfigForms.
 
