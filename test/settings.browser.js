@@ -55,13 +55,18 @@ try {
     let dictionary
     plugin.apply({
       effect: callback => callback(),
-      locale: { register: (_name, values) => { dictionary = values.zh; return () => {} } },
+      locale: {
+        register: (_name, values) => { dictionary = values.zh; return () => {} },
+        bind: () => key => dictionary[key],
+      },
       configForms: { get: id => { if (id !== 'dsh-taskbar-reminder') throw new Error('Wrong config entry'); return form } },
       slots: { inject: (_name, callback) => callback(), register: (options, component) => {
         registrations.push({ options, component }); return () => {}
       } },
     })
-    const row = registrations.find(item => item.options.name === 'settings.general.item')
+    if (registrations.some(item => item.options.name === 'settings.general.item')) throw new Error('Notifications must have their own settings page')
+    const row = registrations.find(item => item.options.name === 'settings.section')
+    if (row.options.label() !== '通知') throw new Error('Wrong navigation label')
     const face = row.options.inject()
     const props = {
       ...face,
@@ -70,10 +75,10 @@ try {
     }
     window.ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(row.component, props))
   })
-  const toggle = page.getByRole('switch', { name: 'Windows 弹窗对话提醒' })
+  const toggle = page.getByRole('switch', { name: 'Windows 系统通知' })
   await toggle.waitFor()
   assert.equal(await toggle.isChecked(), true)
-  const interval = page.getByLabel('自动切换间隔（秒）')
+  const interval = page.getByLabel('通知发送间隔（秒）')
   assert.equal(await interval.inputValue(), '10')
   await toggle.click()
   await page.getByRole('status').filter({ hasText: '已保存' }).waitFor()

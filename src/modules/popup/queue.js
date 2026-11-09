@@ -16,16 +16,16 @@ function waitUntil(time, signal) {
   return interruptible(waiting, signal).finally(() => clearTimeout(timer))
 }
 
-/** FIFO completion queue with a live interval and exactly one popup process at a time. */
+/** FIFO completion queue with a live interval between Windows toast submissions. */
 export function createReminderQueue({ prepare, show, enabled = true, intervalSeconds = 10 }) {
   const pending = [], live = new Set()
-  let running = false, disposed = false, lastReadyAt, reschedule
+  let running = false, disposed = false, lastSentAt, reschedule
 
   async function waitForSlot(signal) {
-    while (lastReadyAt !== undefined && Date.now() < lastReadyAt + intervalSeconds * 1000) {
+    while (lastSentAt !== undefined && Date.now() < lastSentAt + intervalSeconds * 1000) {
       const delay = new AbortController()
       reschedule = delay
-      try { await waitUntil(lastReadyAt + intervalSeconds * 1000, AbortSignal.any([signal, delay.signal])) }
+      try { await waitUntil(lastSentAt + intervalSeconds * 1000, AbortSignal.any([signal, delay.signal])) }
       catch (error) { if (signal.aborted || !delay.signal.aborted) throw error }
       finally { if (reschedule === delay) reschedule = undefined }
     }
@@ -42,10 +42,8 @@ export function createReminderQueue({ prepare, show, enabled = true, intervalSec
           if (prepared.error) throw prepared.error
           await waitForSlot(item.signal)
           item.signal.throwIfAborted()
-          // Await process closure even on cancellation, before showing another window.
-          await show({ ...item.options, ...prepared.value, signal: item.signal,
-            onReady: () => { lastReadyAt = Date.now() },
-          })
+          await show({ ...item.options, ...prepared.value, signal: item.signal })
+          if (!item.signal.aborted) lastSentAt = Date.now()
           item.resolve()
         } catch (error) {
           if (item.signal.aborted) item.resolve()
@@ -61,7 +59,7 @@ export function createReminderQueue({ prepare, show, enabled = true, intervalSec
       live.delete(item)
       item.resolve()
     }
-    lastReadyAt = undefined
+    lastSentAt = undefined
   }
 
   return {

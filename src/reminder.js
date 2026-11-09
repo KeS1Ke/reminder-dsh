@@ -26,23 +26,17 @@ export function attachReminder(ctx, notify, reportError) {
     notifications.set(agent, pending)
     // Consume before launching the subprocess so repeated idle events cannot duplicate it.
     try {
-      let replied = false
-      const reply = text => {
-        if (disposed || closedAgents.has(agent) || agent.session !== session) {
-          throw new Error('原会话已关闭或切换，请回到 DSH 回复。')
-        }
-        if (replied) return
-        if (typeof text !== 'string' || !text.trim() || text.length > 8000) {
-          throw new Error('回复不能为空，且不能超过 8000 个字符。')
-        }
-        agent.followup(createUserMessage({
-          content: [{ type: 'text', text: text.trim() }], source: { kind: 'user' },
-        }))
-        replied = true
-      }
       Promise.resolve(notify({
-        sessionId: session.id, onReply: reply, completedText: activity.text,
+        sessionId: session.id, completedText: activity.text,
         route: agent.model?.current(), signal: controller.signal,
+        onReply(text) {
+          if (disposed || closedAgents.has(agent) || agent.session !== session) {
+            throw new Error('原会话已关闭或切换，请回到 DSH 回复。')
+          }
+          return agent.followup(createUserMessage({
+            content: [{ type: 'text', text }], source: { kind: 'user' },
+          }))
+        },
       })).catch(error => {
         if (!disposed && !controller.signal.aborted) reportError(error)
       }).finally(() => {

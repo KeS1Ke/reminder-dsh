@@ -15,11 +15,8 @@ test('real Loader updates the enabled reference and runtime without remounting',
   ctx.provide('llm', {})
   const shown = []
   let mounts = 0, captured, shutdowns = 0
-  const intervals = []
   const notifier = {
-    setDurationSeconds: value => intervals.push(value),
     notify: options => new Promise(resolve => {
-      options.onReady()
       shown.push(options)
       options.signal.addEventListener('abort', () => resolve(), { once: true })
     }),
@@ -56,7 +53,6 @@ test('real Loader updates the enabled reference and runtime without remounting',
   assert.deepEqual(shown.map(item => item.sessionId), ['main'])
   await entry.update({ config: { popup: { enabled: true, durationSeconds: 25 } } })
   assert.equal(captured.popup.durationSeconds.get(), 25)
-  assert.equal(intervals.at(-1), 25)
   assert.equal(mounts, 1)
   await entry.update({ config: { popup: { enabled: false } } })
   await flush()
@@ -87,8 +83,8 @@ test('settings select taskbar only, popup only, both, or neither without remount
         stop: () => stops.push('taskbar'), dispose() {},
       }),
       popup: createPopupModule(owner, config.popup, {
-        notify: async options => { options.onReady(); calls.push('popup:' + options.sessionId) },
-        setDurationSeconds() {}, dispose() {},
+        notify: async options => { calls.push('popup:' + options.sessionId) },
+        dispose() {},
       }),
     })
   } }

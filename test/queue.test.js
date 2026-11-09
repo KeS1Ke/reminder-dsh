@@ -10,7 +10,6 @@ function rig(t, prepare = async options => ({ message: options.sessionId })) {
   const queue = createReminderQueue({ prepare, show: options => {
     active++
     maximum = Math.max(maximum, active)
-    options.onReady()
     return new Promise(resolve => {
       const item = { ...options, at: Date.now(), closed: false, close: () => {
         if (item.closed) return
@@ -25,14 +24,15 @@ function rig(t, prepare = async options => ({ message: options.sessionId })) {
   return { queue, shown, maximum: () => maximum }
 }
 
-test('simultaneous completions rotate in order, with 10 seconds between windows', async t => {
+test('simultaneous completions submit in order, with 10 seconds between notifications', async t => {
   const h = rig(t)
   const first = h.queue.enqueue({ sessionId: 'main-1' })
   const second = h.queue.enqueue({ sessionId: 'main-2' })
   await flush()
   assert.deepEqual(h.shown.map(item => item.sessionId), ['main-1'])
-  t.mock.timers.tick(10_000)
   h.shown[0].close()
+  await flush()
+  t.mock.timers.tick(10_000)
   await flush()
   assert.deepEqual(h.shown.map(item => [item.sessionId, item.at]), [['main-1', 0], ['main-2', 10_000]])
   assert.equal(h.maximum(), 1)
@@ -40,7 +40,7 @@ test('simultaneous completions rotate in order, with 10 seconds between windows'
   await Promise.all([first, second])
 })
 
-test('closing early does not display the next reminder before ten seconds', async t => {
+test('the interval starts after Windows submission finishes', async t => {
   const h = rig(t)
   const first = h.queue.enqueue({ sessionId: 'first' })
   const second = h.queue.enqueue({ sessionId: 'second' })
@@ -48,7 +48,7 @@ test('closing early does not display the next reminder before ten seconds', asyn
   t.mock.timers.tick(1000)
   h.shown[0].close()
   await flush()
-  t.mock.timers.tick(8999)
+  t.mock.timers.tick(9999)
   await flush()
   assert.equal(h.shown.length, 1)
   t.mock.timers.tick(1)
@@ -58,9 +58,9 @@ test('closing early does not display the next reminder before ten seconds', asyn
   await Promise.all([first, second])
 })
 
-test('editing keeps the first popup exclusive until it closes', async t => {
+test('a pending submission keeps its slot until it finishes', async t => {
   const h = rig(t)
-  const first = h.queue.enqueue({ sessionId: 'editing' })
+  const first = h.queue.enqueue({ sessionId: 'sending' })
   const second = h.queue.enqueue({ sessionId: 'waiting' })
   await flush()
   t.mock.timers.tick(60_000)
@@ -68,13 +68,15 @@ test('editing keeps the first popup exclusive until it closes', async t => {
   assert.equal(h.shown.length, 1)
   h.shown[0].close()
   await flush()
-  assert.equal(h.shown[1].at, 60_000)
+  t.mock.timers.tick(10_000)
+  await flush()
+  assert.equal(h.shown[1].at, 70_000)
   assert.equal(h.maximum(), 1)
   h.shown[1].close()
   await Promise.all([first, second])
 })
 
-test('disabling clears waiting tasks; quick re-enabling waits for the old window to exit', async t => {
+test('disabling clears waiting tasks; quick re-enabling waits for the cancelled submission', async t => {
   const h = rig(t)
   const first = h.queue.enqueue({ sessionId: 'active' })
   const old = h.queue.enqueue({ sessionId: 'discarded' })
@@ -106,8 +108,9 @@ test('a slower first summary does not reorder simultaneous completions', async t
   release({ message: 'slow' })
   await flush()
   assert.equal(h.shown[0].sessionId, 'slow')
-  t.mock.timers.tick(10_000)
   h.shown[0].close()
+  await flush()
+  t.mock.timers.tick(10_000)
   await flush()
   assert.equal(h.shown[1].sessionId, 'fast')
   h.shown[1].close()
@@ -128,7 +131,7 @@ test('disabling during summary generation cancels it and never revives old remin
   assert.equal(h.shown.length, 0)
 })
 
-test('a custom interval can be shortened live while the next popup is waiting', async t => {
+test('a custom interval can be shortened live while the next notification is waiting', async t => {
   const h = rig(t)
   h.queue.setIntervalSeconds(30)
   const first = h.queue.enqueue({ sessionId: 'first' })
@@ -147,7 +150,7 @@ test('a custom interval can be shortened live while the next popup is waiting', 
   await Promise.all([first, second])
 })
 
-test('lengthening the interval reschedules an already waiting popup', async t => {
+test('lengthening the interval reschedules an already waiting notification', async t => {
   const h = rig(t)
   const first = h.queue.enqueue({ sessionId: 'first' })
   const second = h.queue.enqueue({ sessionId: 'second' })

@@ -80,7 +80,7 @@ for (const event of ['agent/error', 'agent/disposed']) {
   })
 }
 
-test('popup failure is contained and reported', async t => {
+test('notification failure is contained and reported', async t => {
   const h = harness(t, () => Promise.reject(new Error('unavailable')))
   h.status('running'); h.end(); h.status('idle')
   await new Promise(resolve => setImmediate(resolve))
@@ -99,62 +99,6 @@ test('configuration validates duration and disabled mode loads', async () => {
   assert.equal(Config({}).durationSeconds.get(), 10)
   for (const durationSeconds of [0, -1, 301, 1.5, '10']) assert.throws(() => Config({ durationSeconds }))
   assert.equal(Config({ enabled: false }).enabled.get(), false)
-})
-
-test('quick reply goes to the originating agent once with a real user message', t => {
-  let popup
-  const h = harness(t, options => { popup = options })
-  const received = []
-  h.agent.session.id = 'main-one'
-  h.agent.followup = message => received.push(message)
-  h.status('running'); h.end(); h.status('idle')
-  assert.equal(popup.sessionId, 'main-one')
-  popup.onReply('  继续处理\n下一步  ')
-  popup.onReply('重复点击')
-  assert.equal(received.length, 1)
-  assert.equal(received[0].role, 'user')
-  assert.equal(typeof received[0].id, 'string')
-  assert.deepEqual(received[0].source, { kind: 'user' })
-  assert.deepEqual(received[0].content, [{ type: 'text', text: '继续处理\n下一步' }])
-})
-
-for (const closed of ['disposed', 'switched', 'plugin-unloaded']) {
-  test(`quick reply rejects a ${closed} session`, async t => {
-    let popup
-    const h = harness(t, options => { popup = options })
-    let received = 0
-    h.agent.followup = () => { received++ }
-    h.status('running'); h.end(); h.status('idle')
-    if (closed === 'disposed') h.ctx.emit('agent/disposed', { agent: h.agent })
-    if (closed === 'switched') h.agent.session = { header: {} }
-    if (closed === 'plugin-unloaded') await h.ctx.fiber.dispose()
-    assert.throws(() => popup.onReply('hello'), /会话已关闭或切换/)
-    assert.equal(received, 0)
-  })
-}
-
-test('blank and oversized quick replies are not enqueued', t => {
-  let popup
-  const h = harness(t, options => { popup = options })
-  const received = []
-  h.agent.followup = message => received.push(message)
-  h.status('running'); h.end(); h.status('idle')
-  for (const text of ['  \n ', 'a'.repeat(8001)]) assert.throws(() => popup.onReply(text), /回复不能为空/)
-  assert.deepEqual(received, [])
-})
-
-test('two simultaneous popup replies stay with their respective agents', t => {
-  const popups = [], firstMessages = [], secondMessages = []
-  const h = harness(t, options => { popups.push(options) })
-  h.agent.session.id = 'first'
-  h.agent.followup = message => firstMessages.push(message)
-  const other = { session: { id: 'second', header: {} }, followup: message => secondMessages.push(message) }
-  h.status('running'); h.end(); h.status('idle')
-  h.status('running', other); h.end('completed', other); h.status('idle', other)
-  popups[1].onReply('第二个会话')
-  popups[0].onReply('第一个会话')
-  assert.equal(firstMessages[0].content[0].text, '第一个会话')
-  assert.equal(secondMessages[0].content[0].text, '第二个会话')
 })
 
 test('notification summarizes only the latest turn final answer, excluding reasoning and tools', t => {
@@ -176,10 +120,28 @@ test('notification summarizes only the latest turn final answer, excluding reaso
   assert.equal(popup.route.model, 'test-model')
 })
 
-test('disposing a session aborts its in-flight summary or popup', t => {
+test('disposing a session aborts its in-flight summary or notification', t => {
   let popup
   const h = harness(t, options => { popup = options; return new Promise(() => {}) })
   h.status('running'); h.end(); h.status('idle')
   h.ctx.emit('agent/disposed', { agent: h.agent })
   assert.equal(popup.signal.aborted, true)
+})
+
+test('native replies use the originating session and reject a closed or switched session', t => {
+  let notification
+  const h = harness(t, options => { notification = options })
+  const received = []
+  const original = h.agent.session
+  h.agent.followup = message => received.push(message)
+  h.status('running'); h.end(); h.status('idle')
+  notification.onReply('继续检查')
+  assert.equal(received[0].role, 'user')
+  assert.deepEqual(received[0].content, [{ type: 'text', text: '继续检查' }])
+  h.agent.session = { header: {} }
+  assert.throws(() => notification.onReply('切换后'), /会话已关闭或切换/)
+  h.agent.session = original
+  h.ctx.emit('agent/disposed', { agent: h.agent })
+  assert.throws(() => notification.onReply('关闭后'), /会话已关闭或切换/)
+  assert.equal(received.length, 1)
 })

@@ -7,7 +7,7 @@ export const name = 'dsh-reminder'
 export const inject = ['llm']
 export const Config = Schema.object({
   taskbar: TaskbarConfig.default({}).description('任务栏闪烁模块'),
-  popup: PopupConfig.default({}).description('弹窗与快速回复模块'),
+  popup: PopupConfig.default({}).description('Windows 系统通知模块'),
 })
 
 /** Mount both independently controlled modules behind one main-session completion observer. */

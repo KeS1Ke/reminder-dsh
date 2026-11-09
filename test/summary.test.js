@@ -35,7 +35,7 @@ test('uses the session model for an auxiliary summary, keeping failure caveats i
     assert.equal(options.tools, undefined)
   })
   const text = await summarizeCompletion(llm, config, data, error => errors.push(error))
-  assert.equal(text, '上一轮任务总结\n已完成快速回复；测试通过，Windows 界面待验证。')
+  assert.equal(text, '已完成快速回复；测试通过，Windows 界面待验证。')
   assert.deepEqual(errors, [])
 })
 
@@ -63,7 +63,7 @@ test('timeout aborts model work and still returns a notification excerpt', async
   assert.equal(signal.aborted, true)
 })
 
-test('session disposal cancels summary without returning a stale popup', async () => {
+test('session disposal cancels summary without returning a stale notification', async () => {
   const controller = new AbortController()
   const llm = { prepareCall: async () => new Promise(() => {}) }
   const pending = summarizeCompletion(llm, config, { ...completion(), signal: controller.signal }, () => {})

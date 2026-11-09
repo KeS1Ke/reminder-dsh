@@ -1,7 +1,7 @@
 {
   "name": "@kesike/dsh-taskbar-reminder",
   "version": "0.1.0",
-  "description": "DeepSeek Harness Windows taskbar flashing and popup quick-reply reminders",
+  "description": "DeepSeek Harness Windows notifications with quick reply and taskbar flashing",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
