@@ -121,21 +121,41 @@ public static class DshTaskbarBadge {
         function New-BadgeIcon([int]$value) {
             $text = if ($value -gt 99) { '99+' } else { [string]$value }
             $size = 32
+            # Windows scales the 32px overlay icon down to the taskbar badge slot, so the chip fills the canvas to
+            # match the native badge size (about 18px on screen) instead of relying on canvas pixels.
+            $height = 30
+            $fontSize = switch ($text.Length) { 1 { 27 } 2 { 21 } default { 15 } }
             $bitmap = [System.Drawing.Bitmap]::new($size, $size)
             $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
             try {
                 $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
                 $graphics.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::AntiAliasGridFit
                 $graphics.Clear([System.Drawing.Color]::Transparent)
-                $brush = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(255, 224, 49, 49))
-                try { $graphics.FillEllipse($brush, 0.5, 0.5, $size - 1, $size - 1) } finally { $brush.Dispose() }
-                $fontSize = switch ($text.Length) { 1 { 22 } 2 { 18 } default { 13 } }
                 $font = [System.Drawing.Font]::new('Segoe UI', [single]$fontSize, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
                 try {
+                    # Same shape as the ChatGPT taskbar badge: a dark chip with white digits, widened into a pill only
+                    # as far as the number needs so two- and three-digit counts stay inside the canvas.
+                    # MeasureString pads heavily at these sizes, so the pill width uses the tight typographic metrics.
+                    $tight = [System.Drawing.StringFormat]::GenericTypographic
+                    $textWidth = $graphics.MeasureString($text, $font, [System.Drawing.PointF]::new(0, 0), $tight).Width
+                    $width = [single][Math]::Min($size, [Math]::Max($height, [Math]::Ceiling($textWidth) + 6))
+                    $x = ($size - $width) / 2
+                    $y = ($size - $height) / 2
+                    $shape = [System.Drawing.Drawing2D.GraphicsPath]::new()
+                    try {
+                        $shape.AddArc($x, $y, $height, $height, 90, 180)
+                        $shape.AddArc($x + $width - $height, $y, $height, $height, 270, 180)
+                        $shape.CloseFigure()
+                        $chip = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(255, 38, 37, 45))
+                        try { $graphics.FillPath($chip, $shape) } finally { $chip.Dispose() }
+                    } finally { $shape.Dispose() }
                     $format = [System.Drawing.StringFormat]::new()
                     $format.Alignment = [System.Drawing.StringAlignment]::Center
                     $format.LineAlignment = [System.Drawing.StringAlignment]::Center
-                    $graphics.DrawString($text, $font, [System.Drawing.Brushes]::White, [System.Drawing.RectangleF]::new(0, 0, $size, $size), $format)
+                    # Without NoWrap a number wider than the layout rectangle would wrap onto a second line, and GDI+
+                    # clips the last glyph at the rectangle edge, so the slack rectangle keeps the same centre.
+                    $format.FormatFlags = [System.Drawing.StringFormatFlags]::NoWrap
+                    try { $graphics.DrawString($text, $font, [System.Drawing.Brushes]::White, [System.Drawing.RectangleF]::new(-4, 0, $size + 8, $size), $format) } finally { $format.Dispose() }
                 } finally { $font.Dispose() }
             } finally { $graphics.Dispose() }
             return $bitmap.GetHicon()
@@ -214,3 +234,4 @@ public static class DshTaskbarBadge {
     if ($badgeIcon -ne [IntPtr]::Zero) { $null = [DshTaskbarBadge]::DestroyIcon($badgeIcon) }
 }
 exit $exitCode
+
