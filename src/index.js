@@ -1,6 +1,7 @@
 import Schema from '@deepseek-ai/schemastery'
 import { attachReminder } from './reminder.js'
 import { Config as PopupConfig, createPopupModule } from './modules/popup/index.js'
+import { attachApprovalNotifications } from './modules/popup/approval.js'
 import { Config as TaskbarConfig, createTaskbarModule } from './modules/taskbar/index.js'
 
 export const name = 'dsh-reminder'
@@ -29,6 +30,9 @@ export function startReminderRuntime(ctx, config, modules = {
   const logger = ctx.logger(name)
   ctx.effect(() => () => { for (const module of Object.values(modules)) module.dispose() })
   ctx.on('loader/volatile-update', () => { for (const module of Object.values(modules)) module.update() })
+  if (modules.popup.notifyApproval) {
+    ctx.inject(['approval', 'typertGateway'], scope => attachApprovalNotifications(scope, modules.popup.notifyApproval))
+  }
   attachReminder(ctx, options => Promise.all(Object.entries(modules).map(async ([name, module]) => {
     try { await module.notify(options) }
     catch (error) {

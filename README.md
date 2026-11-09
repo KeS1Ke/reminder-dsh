@@ -28,11 +28,13 @@ Versions before 0.2.0 shipped as package `@kesike/dsh-taskbar-reminder` with the
 
 Open **Settings → Notifications** from the settings sidebar. Windows system notifications default on. Taskbar flashing has its own switch and defaults off.
 
-The notification interval defaults to **10 seconds**, configurable from **1–300 seconds**. It controls the minimum time between consecutive submissions. Windows controls banner duration and delivery through its notification settings for **DSH**. Disabling notifications cancels pending sends.
+The notification interval defaults to **10 seconds**, configurable from **1–300 seconds**. It controls the minimum time between consecutive completion notifications. Windows controls banner duration and delivery through its notification settings for **DeepSeek Harness**. Clicking the notification body opens or focuses DSH Desktop when the `dsh://` protocol is registered.
 
 Both modules only observe successful main-session completion. Subagents, cancelled or failed turns, restored history and duplicate idle events do not notify. Notifications are submitted in completion order.
 
 Quick replies use a Windows activation callback and a local named pipe. Each notification accepts one reply within 24 hours while its original session and backend are running. If DSH cannot confirm delivery, check the original conversation before resending.
+
+Approval notifications show the requesting tool and reason with **Allow** and **Reject** buttons. Allow grants only the current request. The notification and the DSH approval card share the same pending decision, so the buttons expire once the request is handled or withdrawn.
 
 Taskbar flashing identifies DSH by its window title, preferring windows in the backend's ancestor process tree. A browser must have its DSH tab selected. Set a specific title substring if automatic matching fails or multiple unrelated windows match. Foreground windows do not flash. Flashing ends on focus or after about ten seconds; further completions refresh it.
 

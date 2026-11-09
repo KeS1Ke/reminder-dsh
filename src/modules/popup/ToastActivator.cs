@@ -44,13 +44,14 @@ namespace DshReminder
         public int Activate(string appId, string arguments, NotificationInput[] input, uint count)
         {
             if (appId != "KeS1Ke.DSH" || String.IsNullOrEmpty(arguments)) return 0;
-            var route = Regex.Match(arguments, @"\A([a-f0-9]{32}):([a-f0-9]{32})\z");
+            var route = Regex.Match(arguments, @"\A([a-f0-9]{32}):([a-f0-9]{32})(:decision)?\z");
             if (!route.Success) return 0;
+            bool approval = route.Groups[3].Success;
             bool delivered;
             try
             {
                 var entry = Array.Find(input ?? new NotificationInput[0], item => item.Key == "reply");
-                delivered = Deliver(route.Groups[1].Value, route.Groups[2].Value, entry.Value);
+                delivered = Deliver(route.Groups[1].Value, route.Groups[2].Value, approval ? "decision" : entry.Value);
             }
             catch (IOException) { delivered = false; }
             catch (UnauthorizedAccessException) { delivered = false; }
@@ -59,7 +60,8 @@ namespace DshReminder
             if (!delivered)
             {
                 using (Process.Start(new ProcessStartInfo(launcher,
-                    "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + toastScript + "\" -ReplyFailed")
+                    "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + toastScript + "\" "
+                        + (approval ? "-ApprovalFailed" : "-ReplyFailed"))
                 {
                     UseShellExecute = false,
                     CreateNoWindow = true

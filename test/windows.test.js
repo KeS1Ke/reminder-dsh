@@ -75,9 +75,22 @@ test('Windows builds a full-width toast and links the native Send button to the 
   assert.match(result.stdout, /<binding template="ToastGeneric">/)
   assert.ok(result.stdout.includes(`<text hint-maxLines="1">${config.title}</text>`))
   assert.ok(result.stdout.includes('<text hint-maxLines="4">任务完成 &amp; &lt;已就绪&gt; 🐋'))
-  assert.doesNotMatch(result.stdout, /<image\b/)
+  if (result.stdout.includes('launch="dsh://open"')) assert.doesNotMatch(result.stdout, /<image\b/)
+  else assert.match(result.stdout, /<image placement="appLogoOverride" src="file:\/\/\/[^" ]*\/deepseek-harness\.png"/)
   assert.match(result.stdout, /<input id="reply" type="text" placeHolderContent="回复 DSH"/)
   assert.match(result.stdout, /<action content="发送" arguments="test-route" activationType="background" hint-inputId="reply"/)
+})
+
+test('Windows renders distinct native approval actions without a text input', { skip: process.platform !== 'win32' }, () => {
+  const script = fileURLToPath(new URL('../src/modules/popup/toast.ps1', import.meta.url))
+  const input = { ...config, approval: [{ label: '允许', argument: 'allow-route' }, { label: '拒绝', argument: 'reject-route' }] }
+  const result = spawnSync('powershell.exe', [
+    '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, '-ValidateOnly',
+  ], { input: JSON.stringify(input) + '\n', encoding: 'utf8', timeout: 15_000, windowsHide: true })
+  assert.equal(result.status, 0, result.error?.message ?? result.stderr)
+  assert.match(result.stdout, /<action content="允许" arguments="allow-route" activationType="background"/)
+  assert.match(result.stdout, /<action content="拒绝" arguments="reject-route" activationType="background"/)
+  assert.doesNotMatch(result.stdout, /<input\b/)
 })
 
 test('local reply routes isolate sessions, reject empty text and acknowledge duplicate activations once', { skip: process.platform !== 'win32' }, async t => {

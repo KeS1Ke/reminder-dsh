@@ -38,8 +38,8 @@ export function createToastReplies() {
   })
 
   return {
-    async register(onReply) {
-      if (disposed) return
+    async register(onReply, signal) {
+      if (disposed || signal?.aborted) return
       listening ??= new Promise((resolve, reject) => {
         server.once('error', reject)
         server.listen(`\\\\.\\pipe\\kesike-dsh-reply-${pipeId}`, () => {
@@ -48,11 +48,16 @@ export function createToastReplies() {
         })
       }).catch(error => { listening = undefined; throw error })
       await listening
-      if (disposed) return
+      if (disposed || signal?.aborted) return
       const token = randomBytes(16).toString('hex')
-      const release = () => { clearTimeout(timer); routes.delete(token) }
+      const release = () => {
+        signal?.removeEventListener('abort', release)
+        clearTimeout(timer)
+        routes.delete(token)
+      }
       const timer = setTimeout(release, replyLifetimeMs).unref()
       routes.set(token, { onReply, release })
+      signal?.addEventListener('abort', release, { once: true })
       return { argument: `${pipeId}:${token}`, release }
     },
     dispose() {

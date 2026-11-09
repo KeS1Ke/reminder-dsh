@@ -54,16 +54,30 @@ export function createWindowsToast(config, launch = execFile) {
   }
 
   return {
-    async notify({ message = config.message, signal, onReply } = {}) {
+    async notify({ title = config.title, message = config.message, signal, onReply, onDecision } = {}) {
       signal = signal ? AbortSignal.any([signal, lifetime.signal]) : lifetime.signal
       if (signal.aborted) return
-      if (onReply) await startActivator()
+      if (onReply || onDecision) await startActivator()
       if (signal.aborted) return
-      const reply = onReply && await replies.register(onReply)
-      if (signal.aborted) { reply?.release(); return }
-      const payload = { title: config.title, message }
-      if (reply) Object.assign(payload, { reply: reply.argument, replyPlaceholder: '回复 DSH', replyLabel: '发送' })
+      const payload = { title, message }
+      const routes = []
+      let sent = false
       try {
+        if (onDecision) {
+          payload.approval = []
+          for (const [label, outcome] of [['允许', 'allowed-once'], ['拒绝', 'rejected']]) {
+            const route = await replies.register(() => onDecision(outcome), signal)
+            if (!route) return
+            routes.push(route)
+            payload.approval.push({ label, argument: `${route.argument}:decision` })
+          }
+        } else if (onReply) {
+          const reply = await replies.register(onReply)
+          if (!reply) return
+          routes.push(reply)
+          Object.assign(payload, { reply: reply.argument, replyPlaceholder: '回复 DSH', replyLabel: '发送' })
+        }
+        if (signal.aborted) return
         await new Promise((resolve, reject) => {
           // Windows PowerShell's .NET Framework provides the WinRT projection used by toast.ps1.
           const child = launch(powershell, [
@@ -79,11 +93,10 @@ export function createWindowsToast(config, launch = execFile) {
           child.stdin.on('error', () => {})
           child.stdin.end(JSON.stringify(payload) + '\n', 'utf8')
         })
-      } catch (error) {
-        reply?.release()
-        throw error
+        sent = !signal.aborted
+      } finally {
+        if (!sent) for (const route of routes) route.release()
       }
-      if (signal.aborted) reply?.release()
     },
     dispose() { lifetime.abort(); replies.dispose(); activator?.child.stdin.end() },
   }

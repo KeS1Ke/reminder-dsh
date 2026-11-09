@@ -4,7 +4,7 @@ import { summarizeCompletion } from './summary.js'
 import { createReminderQueue } from './queue.js'
 
 export const Config = Schema.object({
-  enabled: Schema.boolean().default(true).description('启用 Windows 系统通知').volatile(),
+  enabled: Schema.boolean().default(true).description('启用 Windows 完成和审批通知').volatile(),
   durationSeconds: Schema.number().min(1).max(300).step(1).default(10)
     .description('连续提交系统通知的最短间隔（秒）').volatile(),
   title: Schema.string().default('DSH 任务完成').description('通知标题'),
@@ -16,6 +16,7 @@ export const Config = Schema.object({
 /** Keep the popup configuration key for existing profiles. */
 export function createPopupModule(ctx, config, notifier = createWindowsToast(config)) {
   const logger = ctx.logger('reminder-popup')
+  let approvals = new AbortController()
   const queue = createReminderQueue({
     enabled: config.enabled.get(), intervalSeconds: config.durationSeconds.get(),
     prepare: async options => ({ message: await summarizeCompletion(ctx.llm, config, options, error => {
@@ -25,10 +26,20 @@ export function createPopupModule(ctx, config, notifier = createWindowsToast(con
   })
   return {
     notify: options => queue.enqueue(options),
+    notifyApproval(options) {
+      if (!config.enabled.get()) return
+      const signal = AbortSignal.any([options.signal, approvals.signal])
+      return notifier.notify({ ...options, signal, onDecision(outcome) {
+        signal.throwIfAborted()
+        return options.onDecision(outcome)
+      } })
+    },
     update() {
       queue.setEnabled(config.enabled.get())
       queue.setIntervalSeconds(config.durationSeconds.get())
+      if (!config.enabled.get()) approvals.abort()
+      else if (approvals.signal.aborted) approvals = new AbortController()
     },
-    dispose() { queue.dispose(); notifier.dispose() },
+    dispose() { queue.dispose(); approvals.abort(); notifier.dispose() },
   }
 }
