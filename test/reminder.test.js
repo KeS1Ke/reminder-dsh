@@ -122,12 +122,20 @@ test('notification summarizes only the latest turn final answer, excluding reaso
   assert.equal(popup.route.model, 'test-model')
 })
 
-test('completion options carry the session title when the title service is available', t => {
+test('completion options carry the session title text from the title snapshot', t => {
   let popup
   const h = harness(t, options => { popup = options })
-  h.ctx.provide('sessionTitle', { get: () => '修复登录流程' })
+  h.ctx.provide('sessionTitle', { get: () => ({ title: '修复登录流程', messageSeqs: [1], source: { kind: 'fallback' }, eventSeq: 2 }) })
   h.status('running'); h.end(); h.status('idle')
   assert.equal(popup.sessionTitle, '修复登录流程')
+})
+
+test('a title snapshot without text yields no session title', t => {
+  let popup
+  const h = harness(t, options => { popup = options })
+  h.ctx.provide('sessionTitle', { get: () => undefined })
+  h.status('running'); h.end(); h.status('idle')
+  assert.equal(popup.sessionTitle, undefined)
 })
 
 test('a missing or failing title service never blocks the reminder', t => {

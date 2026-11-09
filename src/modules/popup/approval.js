@@ -1,4 +1,5 @@
 import { excerpt } from './summary.js'
+import { sessionTitleOf } from '../../reminder.js'
 
 /** Share the exact pending Remote event with DSH's existing approval card. */
 export function attachApprovalNotifications(ctx, notify) {
@@ -33,13 +34,15 @@ export function attachApprovalNotifications(ctx, notify) {
       const event = [...gateway.pendingRemoteEvents.values()].find(item =>
         item.frame?.event === 'approval/request' && item.source?.request === request && item.source.context?.subject === request.agent)
       if (!event) return
+      const tool = excerpt(request.toolName, 64)
       const description = request.reason
-      const message = typeof description === 'string' && description.trim()
+      const reason = typeof description === 'string' && description.trim()
         ? excerpt(description, 220) : '点击通知查看请求详情。'
       void Promise.resolve().then(() => notify({
         sessionId: session.id,
-        title: `需要审批 · ${excerpt(request.toolName, 64)}`,
-        message, signal,
+        // The title stays the session title; the approval context moves into the body.
+        title: sessionTitleOf(ctx, session) ?? `需要审批 · ${tool}`,
+        message: `需要审批（${tool}）：${reason}`, signal,
         onDecision(outcome) {
           if (signal.aborted || request.agent.session !== session || approval.effectivePolicy(session) !== 'ask'
             || gateway.pendingRemoteEvents.get(event.id) !== event

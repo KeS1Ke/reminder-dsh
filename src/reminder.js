@@ -1,5 +1,17 @@
 import { createUserMessage } from '@deepseek-ai/dsh-llm/message'
 
+/**
+ * Read the current title text of one live session.
+ * The title service returns an immutable snapshot, so only its `title` string is used.
+ * Profiles without that bundle, or sessions without an accepted title yet, yield `undefined`.
+ */
+export function sessionTitleOf(ctx, session) {
+  try {
+    const title = ctx.reflect.get('sessionTitle')?.get(session)?.title
+    return typeof title === 'string' && title !== '' ? title : undefined
+  } catch { return undefined }
+}
+
 /** Register live events only: restored history and initially idle agents do not notify. */
 export function attachReminder(ctx, notify, reportError) {
   const activities = new WeakMap()
@@ -8,10 +20,6 @@ export function attachReminder(ctx, notify, reportError) {
   let disposed = false
   const isMain = session => session.header.origin !== 'subagent'
     && !(session.header.delegationDepth > 0)
-  // Optional: profiles without the session-title bundle simply fall back to the configured title.
-  const titleOf = session => {
-    try { return ctx.reflect.get('sessionTitle')?.get(session) } catch { return undefined }
-  }
 
   ctx.on('agent/status', ({ agent, status }) => {
     const session = agent.session
@@ -31,7 +39,7 @@ export function attachReminder(ctx, notify, reportError) {
     // Consume before launching the subprocess so repeated idle events cannot duplicate it.
     try {
       Promise.resolve(notify({
-        sessionId: session.id, sessionTitle: titleOf(session), completedText: activity.text,
+        sessionId: session.id, sessionTitle: sessionTitleOf(ctx, session), completedText: activity.text,
         route: agent.model?.current(), signal: controller.signal,
         onReply(text) {
           if (disposed || closedAgents.has(agent) || agent.session !== session) {

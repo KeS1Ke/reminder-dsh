@@ -5,7 +5,7 @@ import { attachApprovalNotifications } from '../src/modules/popup/approval.js'
 
 const flush = () => new Promise(resolve => setImmediate(resolve))
 
-function fixture(t) {
+function fixture(t, titleSnapshot = { title: '修复登录流程' }) {
   const ctx = new Context(), notifications = []
   t.after(() => ctx.fiber.dispose())
   const pendingRemoteEvents = new Map()
@@ -20,6 +20,7 @@ function fixture(t) {
   let policy = 'ask', sequence = 0
   ctx.provide('approval', { effectivePolicy: () => policy })
   ctx.provide('typertGateway', gateway)
+  if (titleSnapshot) ctx.provide('sessionTitle', { get: () => titleSnapshot })
   attachApprovalNotifications(ctx, options => notifications.push(options))
   ctx.on('approval/request', request => {
     const decision = Promise.withResolvers()
@@ -44,7 +45,8 @@ test('allow and reject settle only the exact pending request, even for identical
   const first = h.ask(), second = h.ask()
   await flush()
   assert.equal(h.notifications.length, 2)
-  assert.match(h.notifications[0].title, /bash/)
+  assert.equal(h.notifications[0].title, '修复登录流程')
+  assert.equal(h.notifications[0].message, '需要审批（bash）：需要访问工作区外的文件')
   assert.equal(h.notifications[0].sessionId, 'original')
   h.notifications[1].onDecision('rejected')
   assert.equal(await second, 'rejected')
@@ -52,6 +54,16 @@ test('allow and reject settle only the exact pending request, even for identical
   h.notifications[0].onDecision('allowed-once')
   assert.equal(await first, 'allowed-once')
   assert.throws(() => h.notifications[0].onDecision('rejected'), /已失效/)
+})
+
+test('approval keeps the session title, falling back to the tool name without one', async t => {
+  const titled = fixture(t), untitled = fixture(t, null)
+  titled.ask()
+  untitled.ask({ toolName: 'write' })
+  await flush()
+  assert.equal(titled.notifications[0].title, '修复登录流程')
+  assert.equal(untitled.notifications[0].title, '需要审批 · write')
+  assert.equal(untitled.notifications[0].message, '需要审批（write）：需要访问工作区外的文件')
 })
 
 test('approval from the DSH card makes the notification action stale', async t => {
