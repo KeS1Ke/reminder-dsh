@@ -22,9 +22,11 @@ dsh --profile web
 
 将 `web` 替换成你实际使用的 profile。首次安装后重启对应 DSH；之后调整提醒开关和间隔无需重启。如果安装 PowerShell 后仍找不到 pwsh，请重启终端和 DSH，使 PATH 更新。
 
-包名保留为 `@kesike/dsh-taskbar-reminder`，配置条目 ID 保留为 `dsh-taskbar-reminder`。旧骨架补丁里错误的非 scoped 包名已修正。不要修改条目 ID，也不要在每个 agent 内重复安装。
+包名 `@kesike/reminder-dsh`，配置条目 ID `dsh-reminder`，与 GitHub 仓库名一致。在当前 profile 安装一次即可，不要在每个 agent 里重复安装。
 
-如果安装过独立的 `dsh-winreminder`，请先从该 profile 移除它及其 `id: winreminder` 配置覆盖，避免重复提醒。系统通知沿用 `popup` 配置，任务栏配置位于 `taskbar` 下。
+### 从旧版本升级
+
+0.2.0 之前包名为 `@kesike/dsh-taskbar-reminder`、配置条目 ID 为 `dsh-taskbar-reminder`。升级时先卸载旧包，把 profile 的 `cordis.patch.yml` 中该条目改名为 `dsh-reminder`（`config` 内容保留），再安装新包并重启 DSH。如果安装过旧版独立的 `dsh-winreminder`，也要一并移除，避免重复提醒。系统通知配置位于 `popup` 下，任务栏配置位于 `taskbar` 下。
 
 ## 在设置中选择提醒功能
 
@@ -53,7 +55,7 @@ dsh --profile web
 
 ## 模块二：Windows 系统通知
 
-主会话正常结束并进入空闲后，插件以 **DSH Reminders** 为发送来源提交原生 Toast。顶部显示应用图标和名称，正文显示单行标题、最多四行任务总结和快速回复框。横幅外观、显示时间和通知中心收录由 Windows 管理，受系统通知与勿扰设置控制。
+主会话正常结束并进入空闲后，插件以 **DSH** 为发送来源提交原生 Toast。顶部显示应用图标和名称，正文显示单行标题、最多四行任务总结和快速回复框。横幅外观、显示时间和通知中心收录由 Windows 管理，受系统通知与勿扰设置控制。
 
 在通知中输入内容并点击「发送」，Windows 回调会通过本机命名管道将回复交给触发该通知的 DSH 会话。每条通知可回复一次，回复入口在发送后 24 小时内有效，并要求原会话和 DSH 后端仍在运行。遇到回复未确认的提示时，请回到原会话核对后再发送。
 
@@ -78,7 +80,7 @@ dsh --profile web
 在当前 profile 的 `cordis.patch.yml` 添加覆盖项：
 
 ```yaml
-- id: dsh-taskbar-reminder
+- id: dsh-reminder
   config:
     taskbar:
       enabled: false
@@ -126,10 +128,10 @@ npm run test:taskbar
 ## 卸载
 
 ```powershell
-dsh plugin --profile web remove @kesike/dsh-taskbar-reminder
+dsh plugin --profile web remove @kesike/reminder-dsh
 ```
 
-删除手工添加的 `id: dsh-taskbar-reminder` 覆盖项并重启 DSH。
+删除手工添加的 `id: dsh-reminder` 覆盖项并重启 DSH。
 
 ## 许可证
 

@@ -43,7 +43,7 @@ namespace DshReminder
 
         public int Activate(string appId, string arguments, NotificationInput[] input, uint count)
         {
-            if (appId != "KeS1Ke.DSH.Reminder" || String.IsNullOrEmpty(arguments)) return 0;
+            if (appId != "KeS1Ke.DSH" || String.IsNullOrEmpty(arguments)) return 0;
             var route = Regex.Match(arguments, @"\A([a-f0-9]{32}):([a-f0-9]{32})\z");
             if (!route.Success) return 0;
             bool delivered;

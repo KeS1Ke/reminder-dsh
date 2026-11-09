@@ -39,10 +39,10 @@ $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
 if ($ValidateOnly) { $xml.GetXml(); return }
 
 # Register a dedicated per-user sender so CLI and desktop installs use the same identity.
-$appId = 'KeS1Ke.DSH.Reminder'
+$appId = 'KeS1Ke.DSH'
 $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("Software\Classes\AppUserModelId\$appId")
 try {
-  $key.SetValue('DisplayName', 'DSH Reminders')
+  $key.SetValue('DisplayName', 'DSH')
   $key.SetValue('IconUri', $icon)
   if ($payload.reply) { $key.SetValue('CustomActivator', '{BD86FD58-A2BF-430E-A8D9-8D20238ED61A}') }
 } finally { $key.Dispose() }

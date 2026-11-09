@@ -1,4 +1,4 @@
-- id: dsh-taskbar-reminder
+- id: dsh-reminder
   config:
     taskbar:
       enabled: false

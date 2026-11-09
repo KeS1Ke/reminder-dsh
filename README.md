@@ -16,13 +16,17 @@ dsh plugin --profile web add github:KeS1Ke/reminder-dsh
 dsh --profile web
 ```
 
-Replace `web` with your actual profile. Restart after installation; settings changes then apply without restarting. The existing package name remains `@kesike/dsh-taskbar-reminder` and the profile entry remains `dsh-taskbar-reminder`. Remove a separately installed `dsh-winreminder` package before migrating to avoid duplicate reminders.
+Replace `web` with your actual profile. Restart after installation; settings changes then apply without restarting. The plugin installs as package `@kesike/reminder-dsh` and registers the profile entry `dsh-reminder`.
+
+### Upgrading from older names
+
+Versions before 0.2.0 shipped as package `@kesike/dsh-taskbar-reminder` with the profile entry `dsh-taskbar-reminder`. To migrate, remove the old package, rename that entry in your profile's `cordis.patch.yml` to `dsh-reminder` (keep its `config`), then install the current version and restart DSH. Remove any separately installed `dsh-winreminder` package to avoid duplicate reminders.
 
 ## Settings
 
 Open **Settings → Notifications** from the settings sidebar. Windows system notifications default on. Taskbar flashing has its own switch and defaults off.
 
-The notification interval defaults to **10 seconds**, configurable from **1–300 seconds**. It controls the minimum time between consecutive submissions. Windows controls banner duration and delivery through its notification settings for **DSH Reminders**. Disabling notifications cancels pending sends.
+The notification interval defaults to **10 seconds**, configurable from **1–300 seconds**. It controls the minimum time between consecutive submissions. Windows controls banner duration and delivery through its notification settings for **DSH**. Disabling notifications cancels pending sends.
 
 Both modules only observe successful main-session completion. Subagents, cancelled or failed turns, restored history and duplicate idle events do not notify. Notifications are submitted in completion order.
 

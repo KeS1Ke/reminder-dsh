@@ -27,7 +27,7 @@ test('uses the session model for an auxiliary summary, keeping failure caveats i
   ], (route, options, signal) => {
     assert.equal(route.model, data.route.model)
     assert.equal(route.maxTokens, 512)
-    assert.equal(options.purpose, 'winreminder-summary')
+    assert.equal(options.purpose, 'reminder-dsh-summary')
     assert.equal(options.sessionId, 'original-session')
     assert.equal(options.signal, signal)
     assert.equal(JSON.parse(options.messages[0].content[0].text).finalAssistantReply, data.completedText)

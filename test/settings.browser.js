@@ -59,7 +59,7 @@ try {
         register: (_name, values) => { dictionary = values.zh; return () => {} },
         bind: () => key => dictionary[key],
       },
-      configForms: { get: id => { if (id !== 'dsh-taskbar-reminder') throw new Error('Wrong config entry'); return form } },
+      configForms: { get: id => { if (id !== 'dsh-reminder') throw new Error('Wrong config entry'); return form } },
       slots: { inject: (_name, callback) => callback(), register: (options, component) => {
         registrations.push({ options, component }); return () => {}
       } },
