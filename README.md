@@ -32,13 +32,13 @@ The notification interval defaults to **10 seconds**, configurable from **1–30
 
 Clicking the notification body switches back to DSH **and opens the session that notification belongs to**, instead of whichever session is currently shown. The click is a local background activation: the plugin posts the session id to the backend, the GUI picks it up through a host long poll and calls `uiWorkspace.openSession`, then the activator launches `dsh://open` to focus the desktop window. The jump therefore requires the reminder backend to be running (same as the reply and approval buttons); when the backend has exited, clicking does not open DSH.
 
-**Show task summary in notifications** defaults on: the notification shows the session title plus a task summary compressed to three lines. Turning it off shows only the session title and skips the summary model request. The session title comes from DSH's session-title service; when that service is unavailable the configured title is used.
+**Show task summary in notifications** defaults on: the notification shows the session title plus a task summary compressed to three lines. Turning it off shows only the session title and skips the summary model request. The session title comes from DSH's session-title service and heads every notification, approvals included; when that service has no title for the session the configured title is used.
 
 Both modules only observe successful main-session completion. Subagents, cancelled or failed turns, restored history and duplicate idle events do not notify. Notifications are submitted in completion order.
 
 Quick replies use a Windows activation callback and a local named pipe. Each notification accepts one reply within 24 hours while its original session and backend are running. If DSH cannot confirm delivery, check the original conversation before resending.
 
-Approval notifications show the requesting tool and reason with **Allow** and **Reject** buttons. Allow grants only the current request. The notification and the DSH approval card share the same pending decision, so the buttons expire once the request is handled or withdrawn.
+Approval notifications use the same session title as their heading (falling back to `Needs approval · <tool>`), show the requesting tool and reason in the body, and offer **Allow** and **Reject** buttons. Allow grants only the current request. The notification and the DSH approval card share the same pending decision, so the buttons expire once the request is handled or withdrawn.
 
 Taskbar badges identify DSH by its window title, preferring windows in the backend's ancestor process tree. A browser must have its DSH tab selected. Set a specific title substring if automatic matching fails or multiple unrelated windows match. Foreground windows show no badge. Each completed main session increments the unread count; focusing the target window clears the badge and the count. Counts above 99 display as **99+**. The helper process clears the badge after two hours as a safety net.
 
@@ -51,7 +51,7 @@ Notification summaries make one auxiliary model request using the session's exis
 - `src/reminder.js`: shared main-session completion detection and session-title lookup.
 - `lib/client.js`: settings for both modules, using DSH ConfigForms.
 
-See [example.patch.yml](example.patch.yml) for the nested `taskbar` / `popup` configuration. Existing `popup` settings carry over. `popup.durationSeconds` now controls the submission interval. Switches, target window title and interval apply immediately and persist through DSH's profile configuration.
+See [example.patch.yml](example.patch.yml) for the nested `taskbar` / `popup` configuration. Existing `popup` settings carry over, and `popup.durationSeconds` now controls the submission interval. The three switches only change the values shown on the page. Click **Save** at the bottom of the page to write them (every pending switch is submitted as one atomic change), or **Cancel** to discard them. A successful save briefly confirms itself; a refused save keeps the pending values and shows the error so you can retry or cancel. The target window title and the notification interval keep their own save buttons. All writes persist through DSH's profile configuration without remounting the plugin.
 
 ## Validation
 
@@ -64,7 +64,7 @@ npm pack --dry-run
 
 On Windows, `npm run test:popup` sends a sample system notification and prints a test reply to the terminal. `npm run test:taskbar -- "specific window title"` checks the taskbar badge; switch away from DSH to see it. Set `CHROMIUM_PATH` for the settings-component browser test if necessary.
 
-Automated checks include Cordis Loader hot updates, independent module selection, queue scheduling, model-failure handling and subprocess control. Windows-only checks cover the native toast payload and Win32 helper. Notifications are delivered on the Windows backend machine.
+Automated checks include Cordis Loader hot updates, independent module selection, queue scheduling, notification title selection, model-failure handling and subprocess control. The browser check covers the staged switch save/cancel bar, its atomic write and refused writes. Windows-only checks cover the native toast payload and Win32 helper. Notifications are delivered on the Windows backend machine.
 
 Publish a release with `npm publish --access public --registry=https://registry.npmjs.org`; the explicit registry is required whenever the configured default is a mirror.
 
