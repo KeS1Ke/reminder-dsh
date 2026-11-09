@@ -1,7 +1,7 @@
 {
   "name": "@kesike/reminder-dsh",
-  "version": "0.2.0",
-  "description": "DeepSeek Harness Windows notifications with quick reply and taskbar completion badge",
+  "version": "0.2.1",
+  "description": "Windows native notifications and taskbar badge for DeepSeek Harness: session-titled toasts with quick reply and approvals · DSH 的 Windows 原生通知与任务栏角标",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
