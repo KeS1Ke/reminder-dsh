@@ -97,6 +97,8 @@ test('unload stops reminders', async t => {
 
 test('configuration validates duration and disabled mode loads', async () => {
   assert.equal(Config({}).durationSeconds.get(), 10)
+  assert.equal(Config({}).showSummary.get(), true)
+  assert.equal(Config({ showSummary: false }).showSummary.get(), false)
   for (const durationSeconds of [0, -1, 301, 1.5, '10']) assert.throws(() => Config({ durationSeconds }))
   assert.equal(Config({ enabled: false }).enabled.get(), false)
 })
@@ -118,6 +120,22 @@ test('notification summarizes only the latest turn final answer, excluding reaso
   h.end(); h.status('idle')
   assert.equal(popup.completedText, '新任务已完成，测试通过。')
   assert.equal(popup.route.model, 'test-model')
+})
+
+test('completion options carry the session title when the title service is available', t => {
+  let popup
+  const h = harness(t, options => { popup = options })
+  h.ctx.provide('sessionTitle', { get: () => '修复登录流程' })
+  h.status('running'); h.end(); h.status('idle')
+  assert.equal(popup.sessionTitle, '修复登录流程')
+})
+
+test('a missing or failing title service never blocks the reminder', t => {
+  let popup
+  const h = harness(t, options => { popup = options })
+  h.ctx.provide('sessionTitle', { get: () => { throw new Error('session is not live') } })
+  h.status('running'); h.end(); h.status('idle')
+  assert.equal(popup.sessionTitle, undefined)
 })
 
 test('disposing a session aborts its in-flight summary or notification', t => {

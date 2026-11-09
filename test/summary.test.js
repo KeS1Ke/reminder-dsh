@@ -31,6 +31,7 @@ test('uses the session model for an auxiliary summary, keeping failure caveats i
     assert.equal(options.sessionId, 'original-session')
     assert.equal(options.signal, signal)
     assert.equal(JSON.parse(options.messages[0].content[0].text).finalAssistantReply, data.completedText)
+    assert.match(options.system, /压缩在 3 行以内（约 60 字）/)
     assert.match(options.system, /保留关键失败、未完成事项/)
     assert.equal(options.tools, undefined)
   })
@@ -39,12 +40,33 @@ test('uses the session model for an auxiliary summary, keeping failure caveats i
   assert.deepEqual(errors, [])
 })
 
+test('the three-line budget never exceeds a smaller configured character limit', async () => {
+  let prompt
+  const llm = model([
+    { type: 'text-delta', text: '简短总结。' },
+    { type: 'finish', reason: { kind: 'stop' } },
+  ], (route, options) => { prompt = options.system })
+  const text = await summarizeCompletion(llm, { ...config, summaryMaxChars: 40 }, completion(), () => {})
+  assert.equal(text, '简短总结。')
+  assert.match(prompt, /压缩在 3 行以内（约 40 字）/)
+})
+
+test('line breaks collapse so the character budget bounds the rendered line count', async () => {
+  const llm = model([
+    { type: 'text-delta', text: '第一段完成。\n  第二段仍有风险。\n' },
+    { type: 'finish', reason: { kind: 'stop' } },
+  ])
+  const text = await summarizeCompletion(llm, config, completion(), () => {})
+  assert.equal(text, '第一段完成。 第二段仍有风险。')
+})
+
 test('summary failure clearly labels a final-answer excerpt instead', async () => {
   const errors = []
   const llm = model([{ type: 'finish', reason: { kind: 'error' } }])
   const text = await summarizeCompletion(llm, config, completion(), error => errors.push(error))
   assert.match(text, /^AI 总结暂不可用。上一轮最终回复摘录：/)
-  assert.match(text, /Windows 界面尚未实测/)
+  assert.match(text, /已添加快速回复输入框/)
+  assert.ok(text.endsWith('…'))
   assert.equal(errors.length, 1)
 })
 

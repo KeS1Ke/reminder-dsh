@@ -8,31 +8,54 @@ import { createTaskbarNotifier } from '../src/modules/taskbar/windows.js'
 import { Config, createTaskbarModule } from '../src/modules/taskbar/index.js'
 
 function rig() {
-  const child = new EventEmitter()
-  child.stdin = new PassThrough()
-  child.stderr = new PassThrough()
-  child.kill = () => { child.killed = true; queueMicrotask(() => child.emit('close', null)) }
-  let launches = 0, invocation, enabled = true
-  const notifier = createTaskbarNotifier({ isEnabled: () => enabled, getWindowTitle: () => 'DSH " $() 中文' }, (...args) => {
-    launches++; invocation = args; return child
+  const calls = []
+  let enabled = true
+  const notifier = createTaskbarNotifier({ isEnabled: () => enabled, getWindowTitle: () => 'DSH " $() 中文' }, (exe, args, options) => {
+    const child = new EventEmitter()
+    child.stdin = new PassThrough()
+    child.stderr = new PassThrough()
+    child.kill = () => { child.killed = true; queueMicrotask(() => child.emit('close', null)) }
+    calls.push({ exe, args, options, child })
+    return child
   })
-  return { child, notifier, launches: () => launches, invocation: () => invocation, disable: () => { enabled = false } }
+  return {
+    calls, notifier,
+    get child() { return calls.at(-1).child },
+    launches: () => calls.length,
+    invocation: () => { const { exe, args, options } = calls.at(-1); return [exe, args, options] },
+    disable: () => { enabled = false },
+  }
 }
 
-test('taskbar calls pwsh with title matching data on stdin and coalesces simultaneous tasks', async () => {
+test('taskbar badges use pwsh with the target window and increment the unread count', async () => {
   const h = rig()
   const first = h.notifier.notify()
   assert.equal(h.invocation()[0], 'pwsh.exe')
   assert.equal(h.invocation()[2].shell, false)
-  assert.equal(JSON.parse(h.child.stdin.read()).windowTitle, 'DSH " $() 中文')
+  assert.deepEqual(JSON.parse(h.child.stdin.read()), {
+    hostPid: process.pid, windowTitle: 'DSH " $() 中文', count: 1, maxMinutes: 120,
+  })
   const second = h.notifier.notify()
   assert.equal(h.launches(), 1)
-  assert.deepEqual(JSON.parse(h.child.stdin.read()), { type: 'refresh' })
+  assert.deepEqual(JSON.parse(h.child.stdin.read()), { type: 'set', count: 2 })
   h.child.emit('close', 0)
   await Promise.all([first, second])
 })
 
-test('disabling requests graceful native cleanup instead of immediately killing flashing', async () => {
+test('a helper that closes on focus resets the next badge to one', async () => {
+  const h = rig()
+  const first = h.notifier.notify()
+  h.child.stdin.read()
+  h.child.emit('close', 0)
+  await first
+  const second = h.notifier.notify()
+  assert.equal(h.launches(), 2)
+  assert.equal(JSON.parse(h.child.stdin.read()).count, 1)
+  h.child.emit('close', 0)
+  await second
+})
+
+test('disabling requests graceful native cleanup instead of immediately killing the helper', async () => {
   const h = rig(), pending = h.notifier.notify()
   h.child.stdin.read()
   h.disable()
@@ -76,8 +99,8 @@ test('taskbar disabled by default does not start a process', async () => {
   assert.equal(calls, 0)
 })
 
-test('taskbar Win32 helper compiles under pwsh on Windows', { skip: process.platform !== 'win32' }, () => {
-  const path = fileURLToPath(new URL('../src/modules/taskbar/flash.ps1', import.meta.url))
+test('taskbar Win32 badge helper compiles under pwsh on Windows', { skip: process.platform !== 'win32' }, () => {
+  const path = fileURLToPath(new URL('../src/modules/taskbar/badge.ps1', import.meta.url))
   const result = spawnSync('pwsh.exe', ['-NoProfile', '-NonInteractive', '-File', path, '-ValidateOnly'], {
     encoding: 'utf8', timeout: 30000, windowsHide: true,
   })

@@ -1,7 +1,7 @@
 {
   "name": "@kesike/reminder-dsh",
   "version": "0.2.0",
-  "description": "DeepSeek Harness Windows notifications with quick reply and taskbar flashing",
+  "description": "DeepSeek Harness Windows notifications with quick reply and taskbar completion badge",
   "type": "module",
   "main": "lib/index.js",
   "exports": {

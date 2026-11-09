@@ -24,7 +24,7 @@ try {
   await page.evaluate(() => {
     const React = window.React
     const listeners = new Set()
-    let snapshot = { status: 'ready', writable: true, value: { popup: { enabled: true, durationSeconds: 10 }, taskbar: { enabled: false, windowTitle: '' } } }
+    let snapshot = { status: 'ready', writable: true, value: { popup: { enabled: true, durationSeconds: 10, showSummary: true }, taskbar: { enabled: false, windowTitle: '' } } }
     window.writes = []
     window.failNext = false
     window.publish = value => {
@@ -67,6 +67,14 @@ try {
     if (registrations.some(item => item.options.name === 'settings.general.item')) throw new Error('Notifications must have their own settings page')
     const row = registrations.find(item => item.options.name === 'settings.section')
     if (row.options.label() !== '通知') throw new Error('Wrong navigation label')
+    if (!registrations.some(item => item.options.name === 'settings.section.icon' && item.options.id === 'dsh-reminder')) {
+      throw new Error('Notifications must register a bell navigation icon')
+    }
+    const bell = registrations.find(item => item.options.name === 'settings.section.icon')
+    const iconRoot = document.createElement('div')
+    iconRoot.id = 'icon-root'
+    document.body.appendChild(iconRoot)
+    window.ReactDOM.createRoot(iconRoot).render(React.createElement(bell.component, { size: 16 }))
     const face = row.options.inject()
     const props = {
       ...face,
@@ -75,6 +83,9 @@ try {
     }
     window.ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(row.component, props))
   })
+  const bellPaths = page.locator('#icon-root svg path')
+  assert.equal(await page.locator('#icon-root svg').getAttribute('viewBox'), '0 0 16 16')
+  assert.equal(await bellPaths.count(), 2)
   const toggle = page.getByRole('switch', { name: 'Windows 系统通知' })
   await toggle.waitFor()
   assert.equal(await toggle.isChecked(), true)
@@ -86,10 +97,16 @@ try {
   await interval.fill('25')
   await page.getByRole('button', { name: '保存间隔' }).click()
   await page.getByRole('status').filter({ hasText: '已保存' }).waitFor()
+  const summary = page.getByRole('switch', { name: '在通知中显示任务总结' })
+  assert.equal(await summary.isChecked(), true)
+  await summary.click()
+  await page.getByRole('status').filter({ hasText: '已保存' }).waitFor()
+  assert.equal(await summary.isChecked(), false)
   assert.deepEqual(await page.evaluate(() => window.writes), [
     { path: ['popup', 'enabled'], value: false }, { path: ['popup', 'durationSeconds'], value: 25 },
+    { path: ['popup', 'showSummary'], value: false },
   ])
-  const taskbar = page.getByRole('switch', { name: 'Windows 任务栏图标闪烁' })
+  const taskbar = page.getByRole('switch', { name: 'Windows 任务栏完成角标' })
   assert.equal(await taskbar.isChecked(), false)
   await taskbar.click()
   await page.getByRole('status').filter({ hasText: '已保存' }).waitFor()
@@ -108,10 +125,11 @@ try {
   await toggle.click()
   await page.getByRole('alert').waitFor()
   assert.equal(await toggle.isChecked(), false)
-  await page.evaluate(() => window.publish({ popup: { enabled: true, durationSeconds: 35 } }))
+  await page.evaluate(() => window.publish({ popup: { enabled: true, durationSeconds: 35, showSummary: true } }))
   await page.waitForFunction(() => document.querySelector('input[type="number"]').value === '35')
   assert.equal(await toggle.isChecked(), true)
+  assert.equal(await summary.isChecked(), true)
   assert.equal(await taskbar.isChecked(), true)
   assert.deepEqual(errors, [])
-  console.log('Settings browser checks passed: toggle, interval save/validation, refused write, external live update.')
+  console.log('Settings browser checks passed: bell icon, summary toggle, interval save/validation, refused write, external live update.')
 } finally { await browser.close() }

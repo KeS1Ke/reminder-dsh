@@ -1,11 +1,13 @@
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
-const script = fileURLToPath(new URL('./flash.ps1', import.meta.url))
+const script = fileURLToPath(new URL('./badge.ps1', import.meta.url))
+// The helper clears the badge on focus; the lifetime only stops a forgotten process from living forever.
+const badgeMinutes = 120
 
-/** Coalesce taskbar attention for the same app; stop gracefully to clear native flashing. */
+/** Coalesce taskbar badges for the same app; keep one helper process and update its unread count. */
 export function createTaskbarNotifier({ isEnabled, getWindowTitle }, launch = spawn) {
-  let active, disposed = false
+  let active, disposed = false, count = 0
 
   function send(state, message) {
     if (!state.child.stdin.destroyed) state.child.stdin.write(JSON.stringify(message) + '\n', 'utf8')
@@ -28,7 +30,7 @@ export function createTaskbarNotifier({ isEnabled, getWindowTitle }, launch = sp
       finished = true
       clearTimeout(state.timeout)
       clearTimeout(state.killTimer)
-      if (active === state) active = undefined
+      if (active === state) { active = undefined; count = 0 }
       if (failure && !state.stopping && !disposed) reject(failure)
       else resolve()
     }
@@ -36,14 +38,10 @@ export function createTaskbarNotifier({ isEnabled, getWindowTitle }, launch = sp
     child.stderr.on('data', value => { stderr = (stderr + value).slice(-2048) })
     child.on('error', failure => finish(failure.code === 'ENOENT'
       ? new Error('找不到 pwsh.exe，请安装 PowerShell 7 并重启 DSH。') : failure))
-    child.on('close', code => finish(error ?? (code === 0 ? undefined : new Error(`任务栏提醒失败：${stderr.trim() || code}`))))
+    child.on('close', code => finish(error ?? (code === 0 ? undefined : new Error(`任务栏角标失败：${stderr.trim() || code}`))))
     child.stdin.on('error', failure => { error = failure; child.kill() })
-    state.armDeadline = () => {
-      clearTimeout(state.timeout)
-      state.timeout = setTimeout(() => { error = new Error('任务栏提醒进程超时'); child.kill() }, 30_000)
-    }
-    state.armDeadline()
-    send(state, { hostPid: process.pid, windowTitle: getWindowTitle(), durationSeconds: 10 })
+    state.timeout = setTimeout(() => { error = new Error('任务栏角标进程超时'); child.kill() }, (badgeMinutes + 1) * 60_000)
+    send(state, { hostPid: process.pid, windowTitle: getWindowTitle(), count, maxMinutes: badgeMinutes })
     return state
   }
   function subscribe(state, signal) {
@@ -65,8 +63,13 @@ export function createTaskbarNotifier({ isEnabled, getWindowTitle }, launch = sp
   function notify({ signal } = {}) {
     if (disposed || !isEnabled() || signal?.aborted) return Promise.resolve()
     if (active?.stopping) return active.done.catch(() => {}).then(() => notify({ signal }))
-    if (active) { active.armDeadline(); send(active, { type: 'refresh' }) }
-    else active = start()
+    if (active) {
+      count = Math.min(count + 1, 100)
+      send(active, { type: 'set', count })
+    } else {
+      count = 1
+      active = start()
+    }
     return subscribe(active, signal)
   }
   return {

@@ -26,15 +26,21 @@ $null = [Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, C
 $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime]
 
 # Let the DOM escape text and remove characters that Windows cannot store in XML.
+# Without a task summary the toast keeps a single text node and shows only the session title.
+$message = [string]$payload.message
 $xml = [Windows.Data.Xml.Dom.XmlDocument]::new()
-$xml.LoadXml('<toast><visual><binding template="ToastGeneric"><text hint-maxLines="1"/><text hint-maxLines="4"/></binding></visual></toast>')
+$xml.LoadXml($(if ($message) {
+  '<toast><visual><binding template="ToastGeneric"><text hint-maxLines="1"/><text hint-maxLines="3"/></binding></visual></toast>'
+} else {
+  '<toast><visual><binding template="ToastGeneric"><text hint-maxLines="1"/></binding></visual></toast>'
+}))
 if ($desktop) {
   $xml.DocumentElement.SetAttribute('activationType', 'protocol')
   $xml.DocumentElement.SetAttribute('launch', 'dsh://open')
 }
 $invalidXml = '[\x00-\x08\x0B\x0C\x0E-\x1F\uFFFE\uFFFF]'
 $xml.SelectSingleNode('//text[1]').InnerText = ([string]$payload.title) -replace $invalidXml, ''
-$xml.SelectSingleNode('//text[2]').InnerText = ([string]$payload.message) -replace $invalidXml, ''
+if ($message) { $xml.SelectSingleNode('//text[2]').InnerText = $message -replace $invalidXml, '' }
 if (-not $desktop) {
   $image = $xml.CreateElement('image')
   $image.SetAttribute('placement', 'appLogoOverride')

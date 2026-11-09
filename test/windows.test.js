@@ -74,11 +74,21 @@ test('Windows builds a full-width toast and links the native Send button to the 
   assert.equal(result.status, 0, result.error?.message ?? result.stderr)
   assert.match(result.stdout, /<binding template="ToastGeneric">/)
   assert.ok(result.stdout.includes(`<text hint-maxLines="1">${config.title}</text>`))
-  assert.ok(result.stdout.includes('<text hint-maxLines="4">任务完成 &amp; &lt;已就绪&gt; 🐋'))
+  assert.ok(result.stdout.includes('<text hint-maxLines="3">任务完成 &amp; &lt;已就绪&gt; 🐋'))
   if (result.stdout.includes('launch="dsh://open"')) assert.doesNotMatch(result.stdout, /<image\b/)
   else assert.match(result.stdout, /<image placement="appLogoOverride" src="file:\/\/\/[^" ]*\/deepseek-harness\.png"/)
   assert.match(result.stdout, /<input id="reply" type="text" placeHolderContent="回复 DSH"/)
   assert.match(result.stdout, /<action content="发送" arguments="test-route" activationType="background" hint-inputId="reply"/)
+})
+
+test('Windows shows only the session title when the summary is hidden', { skip: process.platform !== 'win32' }, () => {
+  const script = fileURLToPath(new URL('../src/modules/popup/toast.ps1', import.meta.url))
+  const result = spawnSync('powershell.exe', [
+    '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, '-ValidateOnly',
+  ], { input: JSON.stringify({ title: '会话标题 & <测试>', message: '' }) + '\n', encoding: 'utf8', timeout: 15_000, windowsHide: true })
+  assert.equal(result.status, 0, result.error?.message ?? result.stderr)
+  assert.ok(result.stdout.includes('<text hint-maxLines="1">会话标题 &amp; &lt;测试&gt;</text>'))
+  assert.equal((result.stdout.match(/<text\b/g) ?? []).length, 1)
 })
 
 test('Windows renders distinct native approval actions without a text input', { skip: process.platform !== 'win32' }, () => {

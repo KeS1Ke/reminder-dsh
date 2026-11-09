@@ -7,7 +7,7 @@ import { Config as TaskbarConfig, createTaskbarModule } from './modules/taskbar/
 export const name = 'dsh-reminder'
 export const inject = ['llm']
 export const Config = Schema.object({
-  taskbar: TaskbarConfig.default({}).description('任务栏闪烁模块'),
+  taskbar: TaskbarConfig.default({}).description('任务栏完成角标模块'),
   popup: PopupConfig.default({}).description('Windows 系统通知模块'),
 })
 
