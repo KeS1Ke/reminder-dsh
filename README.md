@@ -12,9 +12,11 @@ Windows reminders for DeepSeek Harness, with two independently configurable modu
 Requires Windows 10/11, Node.js 24.9.0+, and DSH `>=0.2.2-rc.1 <0.3.0`. System notifications use the built-in Windows PowerShell. Taskbar flashing requires PowerShell 7 (`pwsh.exe` on PATH).
 
 ```powershell
-dsh plugin --profile web add github:KeS1Ke/reminder-dsh
+dsh plugin --profile web add @kesike/reminder-dsh
 dsh --profile web
 ```
+
+`@kesike/reminder-dsh` is published on [npm](https://www.npmjs.com/package/@kesike/reminder-dsh). The same version installs straight from GitHub with `dsh plugin --profile web add github:KeS1Ke/reminder-dsh`.
 
 Replace `web` with your actual profile. Restart after installation; settings changes then apply without restarting. The plugin installs as package `@kesike/reminder-dsh` and registers the profile entry `dsh-reminder`.
 
@@ -57,6 +59,8 @@ npm pack --dry-run
 On Windows, `npm run test:popup` sends a sample system notification and prints a test reply to the terminal. `npm run test:taskbar -- "specific window title"` checks flashing. Set `CHROMIUM_PATH` for the settings-component browser test if necessary.
 
 Automated checks include Cordis Loader hot updates, independent module selection, queue scheduling, model-failure handling and subprocess control. Windows-only checks cover the native toast payload and Win32 helper. Notifications are delivered on the Windows backend machine.
+
+Publish a release with `npm publish --access public --registry=https://registry.npmjs.org`; the explicit registry is required whenever the configured default is a mirror.
 
 ## License
 

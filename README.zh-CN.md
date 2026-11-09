@@ -16,9 +16,11 @@ DeepSeek Harness 的 Windows 提醒插件提供**原生系统通知**和**任务
 winget install --id Microsoft.PowerShell --source winget
 pwsh --version
 
-dsh plugin --profile web add github:KeS1Ke/reminder-dsh
+dsh plugin --profile web add @kesike/reminder-dsh
 dsh --profile web
 ```
+
+`@kesike/reminder-dsh` 已发布到 [npm](https://www.npmjs.com/package/@kesike/reminder-dsh)；同一版本也可直接从 GitHub 安装：`dsh plugin --profile web add github:KeS1Ke/reminder-dsh`。
 
 将 `web` 替换成你实际使用的 profile。首次安装后重启对应 DSH；之后调整提醒开关和间隔无需重启。如果安装 PowerShell 后仍找不到 pwsh，请重启终端和 DSH，使 PATH 更新。
 
@@ -124,6 +126,8 @@ npm run test:taskbar
 自动测试覆盖真实 Cordis Loader 动态更新、模块独立开关、排队和间隔重算、摘要回退及子进程行为。Chromium 测试通过测试夹具验证「通知」注册和设置保存，可用 `CHROMIUM_PATH` 指定浏览器。Windows 专用测试验证原生通知载荷和 Win32 辅助代码。
 
 提醒发生在 **DSH 后端所在 Windows 机器**。WSL/Linux 后端、远程 Windows 浏览器连接到别处后端、Windows 服务或无人登录会话不保证有可见提醒。
+
+发布：`npm publish --access public --registry=https://registry.npmjs.org`。若本机默认 registry 是镜像，必须显式指定官方源。
 
 ## 卸载
 
