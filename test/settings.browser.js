@@ -10,7 +10,7 @@ const executablePath = process.env.CHROMIUM_PATH ?? [
 if (!executablePath) throw new Error('Set CHROMIUM_PATH to an installed Chromium or Chrome executable')
 const browser = await chromium.launch({ executablePath, headless: true, args: ['--no-sandbox'] })
 try {
-  const page = await browser.newPage({ viewport: { width: 800, height: 580 } })
+  const page = await browser.newPage({ viewport: { width: 800, height: 700 } })
   const errors = []
   page.on('pageerror', error => errors.push(error.message))
   await page.setContent('<html lang="zh"><head><base href="http://test.local/"></head><body style="font-family:system-ui;margin:40px"><h2>Windows 提醒设置</h2><div id="root"></div></body></html>')
@@ -44,10 +44,10 @@ try {
     const form = {
       getSnapshot: () => snapshot,
       subscribe: listener => { listeners.add(listener); return () => listeners.delete(listener) },
-      async mutate([{ path, value }]) {
-        window.writes.push({ path, value })
+      async mutate(ops) {
+        window.writes.push(ops)
         if (window.failNext) { window.failNext = false; return false }
-        window.publish({ [path[0]]: { [path[1]]: value } })
+        for (const { path, value } of ops) window.publish({ [path[0]]: { [path[1]]: value } })
         return true
       },
     }
@@ -100,45 +100,85 @@ try {
   const bellPaths = page.locator('#icon-root svg path')
   assert.equal(await page.locator('#icon-root svg').getAttribute('viewBox'), '0 0 16 16')
   assert.equal(await bellPaths.count(), 2)
+
   const toggle = page.getByRole('switch', { name: 'Windows 系统通知' })
+  const summary = page.getByRole('switch', { name: '在通知中显示任务总结' })
+  const taskbar = page.getByRole('switch', { name: 'Windows 任务栏完成角标' })
+  const interval = page.getByLabel('通知发送间隔（秒）')
+  const bar = page.locator('[data-reminder-switch-changes]')
+  const barStatus = bar.locator('[role="status"]')
+  const popupStatus = page.locator('section[data-reminder-module="popup"] [role="status"]')
+  const taskbarStatus = page.locator('section[data-reminder-module="taskbar"] [role="status"]')
+  const saveSwitches = page.getByRole('button', { name: '保存', exact: true })
+  const cancelSwitches = page.getByRole('button', { name: '取消', exact: true })
+  const writes = () => page.evaluate(() => window.writes)
+
   await toggle.waitFor()
   assert.equal(await toggle.isChecked(), true)
-  const interval = page.getByLabel('通知发送间隔（秒）')
+  assert.equal(await summary.isChecked(), true)
+  assert.equal(await taskbar.isChecked(), false)
   assert.equal(await interval.inputValue(), '10')
+  // Nothing is pending until a switch is toggled, and no write happens on toggle.
+  assert.equal(await bar.count(), 0)
+  assert.equal(await page.getByText('已保存，立即生效。').count(), 0)
+
   await toggle.click()
-  await page.getByRole('status').filter({ hasText: '已保存' }).waitFor()
+  assert.deepEqual(await writes(), [])
   assert.equal(await toggle.isChecked(), false)
+  await barStatus.filter({ hasText: '开关更改尚未保存，保存后立即生效。' }).waitFor()
+  await saveSwitches.click()
+  await barStatus.filter({ hasText: '已保存，立即生效。' }).waitFor()
+  assert.equal(await toggle.isChecked(), false)
+  assert.deepEqual(await writes(), [[{ op: 'set', path: ['popup', 'enabled'], value: false }]])
+  // The confirmation is transient and the buttons are gone until the next change.
+  assert.equal(await saveSwitches.count(), 0)
+  assert.equal(await cancelSwitches.count(), 0)
+
+  await summary.click()
+  await taskbar.click()
+  assert.equal(await writes().then(list => list.length), 1)
+  await barStatus.filter({ hasText: '开关更改尚未保存，保存后立即生效。' }).waitFor()
+  await cancelSwitches.click()
+  assert.equal(await summary.isChecked(), true)
+  assert.equal(await taskbar.isChecked(), false)
+  assert.equal(await bar.count(), 0)
+  assert.equal(await writes().then(list => list.length), 1)
+
+  await summary.click()
+  await taskbar.click()
+  await saveSwitches.click()
+  await barStatus.filter({ hasText: '已保存，立即生效。' }).waitFor()
+  assert.equal(await summary.isChecked(), false)
+  assert.equal(await taskbar.isChecked(), true)
+  assert.deepEqual(await writes().then(list => list.at(-1)), [
+    { op: 'set', path: ['taskbar', 'enabled'], value: true },
+    { op: 'set', path: ['popup', 'showSummary'], value: false },
+  ])
+
   await interval.fill('25')
   await page.getByRole('button', { name: '保存间隔' }).click()
-  await page.getByRole('status').filter({ hasText: '已保存' }).waitFor()
-  const summary = page.getByRole('switch', { name: '在通知中显示任务总结' })
-  assert.equal(await summary.isChecked(), true)
-  await summary.click()
-  await page.getByRole('status').filter({ hasText: '已保存' }).waitFor()
-  assert.equal(await summary.isChecked(), false)
-  assert.deepEqual(await page.evaluate(() => window.writes), [
-    { path: ['popup', 'enabled'], value: false }, { path: ['popup', 'durationSeconds'], value: 25 },
-    { path: ['popup', 'showSummary'], value: false },
-  ])
-  const taskbar = page.getByRole('switch', { name: 'Windows 任务栏完成角标' })
-  assert.equal(await taskbar.isChecked(), false)
-  await taskbar.click()
-  await page.getByRole('status').filter({ hasText: '已保存' }).waitFor()
-  assert.equal(await taskbar.isChecked(), true)
-  assert.equal(await toggle.isChecked(), false)
+  await popupStatus.filter({ hasText: '已保存，立即生效。' }).waitFor()
+  assert.deepEqual(await writes().then(list => list.at(-1)), [{ op: 'set', path: ['popup', 'durationSeconds'], value: 25 }])
+
   await page.getByLabel('目标窗口标题包含（可选）').fill('测试会话 — DeepSeek Harness')
   await page.getByRole('button', { name: '保存目标窗口' }).click()
-  await page.getByRole('status').filter({ hasText: '已保存' }).waitFor()
-  assert.deepEqual(await page.evaluate(() => window.writes.slice(-2)), [
-    { path: ['taskbar', 'enabled'], value: true },
-    { path: ['taskbar', 'windowTitle'], value: '测试会话 — DeepSeek Harness' },
-  ])
+  await taskbarStatus.filter({ hasText: '已保存，立即生效。' }).waitFor()
+  assert.deepEqual(await writes().then(list => list.at(-1)), [{ op: 'set', path: ['taskbar', 'windowTitle'], value: '测试会话 — DeepSeek Harness' }])
+
+  // A refused write keeps the pending switch and offers retry or cancel.
+  await page.evaluate(() => { window.failNext = true })
+  await summary.click()
+  await saveSwitches.click()
+  const alert = bar.locator('[role="alert"]')
+  await alert.filter({ hasText: '设置未保存，请检查连接或配置覆盖后重试。' }).waitFor()
+  assert.equal(await summary.isChecked(), true)
+  assert.equal(await saveSwitches.count(), 1)
+  await cancelSwitches.click()
+  assert.equal(await summary.isChecked(), false)
+  assert.equal(await bar.count(), 0)
+
   await interval.fill('0')
   assert.equal(await page.getByRole('button', { name: '保存间隔' }).isDisabled(), true)
-  await page.evaluate(() => { window.failNext = true })
-  await toggle.click()
-  await page.getByRole('alert').waitFor()
-  assert.equal(await toggle.isChecked(), false)
   await page.evaluate(() => window.publish({ popup: { enabled: true, durationSeconds: 35, showSummary: true } }))
   await page.waitForFunction(() => document.querySelector('input[type="number"]').value === '35')
   assert.equal(await toggle.isChecked(), true)
@@ -148,5 +188,5 @@ try {
   assert.deepEqual(await page.evaluate(() => window.opened), ['session-jump'])
   assert.match(await page.evaluate(() => window.fetchUrls[0]), /reminder-dsh\/session-open$/)
   assert.deepEqual(errors, [])
-  console.log('Settings browser checks passed: bell icon, summary toggle, interval save/validation, refused write, external live update, toast session jump.')
+  console.log('Settings browser checks passed: bell icon, staged switch save/cancel, atomic write, per-field feedback, refused write, external live update, toast session jump.')
 } finally { await browser.close() }
