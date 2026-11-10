@@ -1,15 +1,23 @@
 # reminder-dsh
 
-Windows reminders for DeepSeek Harness, with two independently configurable modules:
+Windows native notifications and a taskbar completion badge for DeepSeek Harness. The two modules can be configured independently in **Settings → Notifications**.
 
-- **Taskbar completion badge:** show the number of unread completed sessions on the lower-right corner of the DSH taskbar icon.
-- **Windows system notifications:** show an AI task summary in a native notification banner and Notification Center. The reply field sends a message to the original DSH session.
+- **Completion notifications:** use the session title as the heading and optionally show an AI summary of the final answer, compressed to three lines. Reply directly to the original session from the notification.
+- **Approval notifications:** show the session title, requesting tool and reason, with **Allow** and **Reject** buttons for the current request.
+- **Taskbar completion badge:** show an unread completion count as a dark badge with white digits. Focusing the target window clears the count. This module defaults off and requires PowerShell 7.
+- **Settings:** independently control notifications, the taskbar badge and AI summaries. Save switch changes with the bottom **Save** button; changes apply without restarting DSH.
 
 [完整中文说明](README.zh-CN.md)
+
+## Known issues
+
+- **Clicking a Windows notification does not yet reliably return to the session that notification belongs to.** The source includes a session-open callback, but this interaction is not working correctly in actual use. Open DSH manually and select the session named in the notification. Do not rely on clicking a completion or approval notification to navigate to its session.
 
 ## Install
 
 Requires Windows 10/11, Node.js 24.9.0+, and DSH `>=0.2.2-rc.1 <0.3.0`. System notifications use the built-in Windows PowerShell. The taskbar badge requires PowerShell 7 (`pwsh.exe` on PATH).
+
+Notifications and badges run on the Windows machine hosting the DSH backend, in an interactive desktop session. Opening a remote or WSL/Linux-hosted DSH in a Windows browser does not move notification delivery to that browser's machine.
 
 ```powershell
 dsh plugin --profile web add @kesike/reminder-dsh
@@ -30,11 +38,11 @@ Open **Settings → Notifications** from the settings sidebar. Windows system no
 
 The notification interval defaults to **10 seconds**, configurable from **1–300 seconds**. It controls the minimum time between consecutive completion notifications. Windows controls banner duration and delivery through its notification settings for **DeepSeek Harness**.
 
-Clicking the notification body switches back to DSH **and opens the session that notification belongs to**, instead of whichever session is currently shown. The click is a local background activation: the plugin posts the session id to the backend, the GUI picks it up through a host long poll and calls `uiWorkspace.openSession`, then the activator launches `dsh://open` to focus the desktop window. The jump therefore requires the reminder backend to be running (same as the reply and approval buttons); when the backend has exited, clicking does not open DSH.
+To inspect a completion or approval in context, open DSH manually and select the session named in the notification. Notification-body navigation is a [known issue](#known-issues).
 
 **Show task summary in notifications** defaults on: the notification shows the session title plus a task summary compressed to three lines. Turning it off shows only the session title and skips the summary model request. The session title comes from DSH's session-title service and heads every notification, approvals included; when that service has no title for the session the configured title is used.
 
-Both modules only observe successful main-session completion. Subagents, cancelled or failed turns, restored history and duplicate idle events do not notify. Notifications are submitted in completion order.
+Completion notifications and taskbar badges only observe successful main-session completion. Subagents, cancelled or failed turns, restored history and duplicate idle events do not trigger completion reminders. Completion notifications are submitted in completion order; approval requests also produce their own notifications.
 
 Quick replies use a Windows activation callback and a local named pipe. Each notification accepts one reply within 24 hours while its original session and backend are running. If DSH cannot confirm delivery, check the original conversation before resending.
 
