@@ -7,16 +7,19 @@ const scriptPath = fileURLToPath(new URL('./toast.ps1', import.meta.url))
 const activatorPath = fileURLToPath(new URL('./activate.ps1', import.meta.url))
 const powershell = win32.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
 
-export function createWindowsToast(config, launch = execFile) {
+export function createWindowsToast(config, launch = execFile, launchActivator = spawn) {
   const lifetime = new AbortController()
   const replies = createToastReplies()
   let activator
 
   function startActivator() {
     if (activator) return activator.ready
-    const child = spawn(powershell, [
+    const env = { ...process.env }
+    // Desktop Host runs Electron as Node. The activator must launch dsh://open in GUI mode.
+    delete env.ELECTRON_RUN_AS_NODE
+    const child = launchActivator(powershell, [
       '-NoLogo', '-NoProfile', '-NonInteractive', '-MTA', '-ExecutionPolicy', 'Bypass', '-File', activatorPath,
-    ], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
+    ], { env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
     const ready = new Promise((resolve, reject) => {
       let stdout = '', stderr = ''
       const timer = setTimeout(() => {
@@ -64,7 +67,8 @@ export function createWindowsToast(config, launch = execFile) {
       let sent = false
       try {
         if (onOpen) {
-          const open = await replies.registerOpen(onOpen, signal)
+          // Keep the jump available while the notification sits in the action center, even after this turn ended.
+          const open = await replies.registerOpen(onOpen, lifetime.signal)
           if (!open) return
           routes.push(open)
           // The body click is a background activation: it notifies this process, then opens the app.

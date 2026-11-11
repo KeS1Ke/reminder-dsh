@@ -17,47 +17,23 @@ export const Config = Schema.object({
   summaryTimeoutSeconds: Schema.number().min(1).max(60).step(1).default(15).description('AI 总结超时秒数'),
 })
 
-/**
- * The GUI long-polls this route and navigates to the session a clicked toast belongs to.
- * Registered only where the host owns a web server and connection trust (the web/desktop app).
- */
+/** DSH's Fetch router admits only authenticated owner peers and forwards request cancellation. */
 function attachSessionOpenRoute(ctx, requests, logger) {
-  ctx.inject(['webServer', 'connection'], scope => {
-    const webServer = scope.get('webServer')
-    const connection = scope.get('connection')
-    if (!webServer || !connection) return
-    scope.effect(() => {
-      try {
-        return webServer.register({
-          kind: 'exact',
-          path: '/reminder-dsh/session-open',
-          handler: async (request, response) => {
-            if (typeof connection.requestRejection === 'function' && connection.requestRejection(request) !== undefined) {
-              response.writeHead(403)
-              response.end()
-              return
-            }
-            if (request.method !== 'GET') {
-              response.writeHead(405)
-              response.end()
-              return
-            }
-            const sessionId = await requests.take()
-            if (sessionId === undefined) {
-              response.writeHead(204)
-              response.end()
-              return
-            }
-            response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
-            response.end(JSON.stringify({ sessionId }))
-          },
-        })
-      } catch (error) {
-        // Session jumps are a convenience: never let a route conflict break reminders.
-        logger.warn(`会话跳转路由不可用：${error instanceof Error ? error.message : String(error)}`)
-        return () => {}
-      }
-    }, 'reminder-dsh: session open route')
+  ctx.inject(['connection'], scope => {
+    try {
+      return scope.connection.fetch.register({
+        path: '/api/reminder-dsh/session-open', methods: ['GET'], requestBody: 'buffered',
+        async fetch(request) {
+          const acknowledgedId = new URL(request.url).searchParams.get('ack')
+          const open = await requests.take(acknowledgedId, request.signal)
+          const headers = { 'cache-control': 'no-store' }
+          return open ? Response.json(open, { headers }) : new Response(null, { status: 204, headers })
+        },
+      })
+    } catch (error) {
+      // Keep sending reminders when the host's session navigation route is unavailable.
+      logger.warn(`会话跳转路由不可用：${error instanceof Error ? error.message : String(error)}`)
+    }
   })
 }
 
@@ -98,6 +74,6 @@ export function createPopupModule(ctx, config, notifier = createWindowsToast(con
       if (!config.enabled.get()) approvals.abort()
       else if (approvals.signal.aborted) approvals = new AbortController()
     },
-    dispose() { queue.dispose(); approvals.abort(); notifier.dispose() },
+    dispose() { queue.dispose(); approvals.abort(); opens.dispose(); notifier.dispose() },
   }
 }

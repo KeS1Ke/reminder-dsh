@@ -6,20 +6,22 @@ import { Config, createPopupModule } from '../src/modules/popup/index.js'
 
 const flush = () => new Promise(resolve => setImmediate(resolve))
 
-function fakeResponse() {
-  return {
-    status: 0, headers: {}, body: '',
-    writeHead(status, headers) { this.status = status; Object.assign(this.headers, headers ?? {}) },
-    end(body) { this.body = body ?? '' },
-  }
-}
-
-test('a click posts one session id and the next poll consumes it once', async () => {
-  const requests = createSessionOpenRequests({ timeoutMs: 10 })
-  const pending = requests.take()
+test('an aborted or unacknowledged poll leaves the jump available to the next page', async t => {
+  const requests = createSessionOpenRequests()
+  t.after(() => requests.dispose())
+  const controller = new AbortController()
+  const abandoned = requests.take(null, controller.signal)
+  controller.abort()
   requests.request('session-a')
-  assert.equal(await pending, 'session-a')
-  assert.equal(await requests.take(), undefined)
+  assert.equal(await abandoned, undefined)
+  const opened = await requests.take()
+  assert.equal(opened.sessionId, 'session-a')
+  assert.deepEqual(await requests.take(), opened)
+  const pending = requests.take(opened.id)
+  requests.request('session-b')
+  const latest = await pending
+  assert.equal(latest.sessionId, 'session-b')
+  assert.deepEqual(await requests.take(opened.id), latest)
 })
 
 test('a poll without a click gives up after its timeout', async t => {
@@ -30,42 +32,32 @@ test('a poll without a click gives up after its timeout', async t => {
   assert.equal(await pending, undefined)
 })
 
-test('a clicked notification wires the GUI route to its session', async t => {
+test('completion and approval clicks select their own session through the DSH Fetch route', async t => {
   const ctx = new Context()
   t.after(() => ctx.fiber.dispose())
   ctx.provide('llm', {})
   const routes = []
-  ctx.provide('webServer', { register: route => { routes.push(route); return () => {} } })
-  ctx.provide('connection', { requestRejection: () => undefined })
+  ctx.provide('connection', { fetch: { register: route => { routes.push(route); return () => {} } } })
   const notifications = []
   const module = createPopupModule(ctx, Config({ showSummary: false }), {
     notify: options => { notifications.push(options); return Promise.resolve() }, dispose() {},
   })
   t.after(() => module.dispose())
   await flush()
-  const route = routes.find(item => item.path === '/reminder-dsh/session-open')
+  const route = routes.find(item => item.path === '/api/reminder-dsh/session-open')
   assert.ok(route, 'session-open route registered')
-  await module.notify({ sessionId: 'session-42', sessionTitle: '标题', completedText: '', signal: new AbortController().signal })
-  assert.equal(typeof notifications[0].onOpen, 'function')
+  assert.deepEqual(route.methods, ['GET'])
+  const signal = new AbortController().signal
+  await module.notify({ sessionId: 'session-42', sessionTitle: '标题', completedText: '', signal })
+  await module.notifyApproval({ sessionId: 'approval-17', onDecision: () => {}, signal })
+  const endpoint = new URL(route.path, 'http://localhost')
   notifications[0].onOpen()
-  const response = fakeResponse()
-  await route.handler({ method: 'GET' }, response)
+  const response = await route.fetch(new Request(endpoint))
   assert.equal(response.status, 200)
-  assert.deepEqual(JSON.parse(response.body), { sessionId: 'session-42' })
-})
-
-test('the GUI route rejects unauthenticated browser requests', async t => {
-  const ctx = new Context()
-  t.after(() => ctx.fiber.dispose())
-  ctx.provide('llm', {})
-  const routes = []
-  ctx.provide('webServer', { register: route => { routes.push(route); return () => {} } })
-  ctx.provide('connection', { requestRejection: () => 403 })
-  const module = createPopupModule(ctx, Config({ showSummary: false }), { notify: async () => {}, dispose() {} })
-  t.after(() => module.dispose())
-  await flush()
-  const route = routes.find(item => item.path === '/reminder-dsh/session-open')
-  const response = fakeResponse()
-  await route.handler({ method: 'GET' }, response)
-  assert.equal(response.status, 403)
+  assert.equal(response.headers.get('cache-control'), 'no-store')
+  const opened = await response.json()
+  assert.equal(opened.sessionId, 'session-42')
+  endpoint.searchParams.set('ack', opened.id)
+  notifications[1].onOpen()
+  assert.equal((await (await route.fetch(new Request(endpoint))).json()).sessionId, 'approval-17')
 })

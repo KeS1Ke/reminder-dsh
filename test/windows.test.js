@@ -46,6 +46,26 @@ test('toast process failures report stderr or the launch error', async () => {
   }
 })
 
+test('the activator can relaunch Desktop from an Electron Host running as Node', { timeout: 5_000 }, async t => {
+  const previous = process.env.ELECTRON_RUN_AS_NODE
+  process.env.ELECTRON_RUN_AS_NODE = '1'
+  t.after(() => {
+    if (previous === undefined) delete process.env.ELECTRON_RUN_AS_NODE
+    else process.env.ELECTRON_RUN_AS_NODE = previous
+  })
+  const stopped = new Error('test activator stopped before launch')
+  let environment
+  const notifier = createWindowsToast(config, () => assert.fail('unexpected toast submission'), (_exe, _args, options) => {
+    environment = options.env
+    throw stopped
+  })
+  t.after(() => notifier.dispose())
+  await assert.rejects(notifier.notify({ onOpen() {} }), stopped)
+  assert.equal(environment.ELECTRON_RUN_AS_NODE, undefined)
+  assert.equal(environment.SystemRoot, process.env.SystemRoot)
+  assert.equal(process.env.ELECTRON_RUN_AS_NODE, '1')
+})
+
 for (const cancel of ['session', 'plugin']) {
   test(`${cancel} cancellation aborts the child and prevents another launch`, async () => {
     const fake = fakeLaunch(), controller = new AbortController()
@@ -91,15 +111,16 @@ test('Windows shows only the session title when the summary is hidden', { skip: 
   assert.equal((result.stdout.match(/<text\b/g) ?? []).length, 1)
 })
 
-test('Windows routes a body click to the session route instead of the DSH protocol', { skip: process.platform !== 'win32' }, () => {
+test('Windows sends the session route to the toast activator and keeps approval actions separate', { skip: process.platform !== 'win32' }, () => {
   const script = fileURLToPath(new URL('../src/modules/popup/toast.ps1', import.meta.url))
-  const route = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:open'
+  const pipe = 'a'.repeat(32), token = 'b'.repeat(32)
+  const route = `${pipe}:${token}:open`
   const result = spawnSync('powershell.exe', [
     '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, '-ValidateOnly',
-  ], { input: JSON.stringify({ title: '会话标题', message: '', open: route }) + '\n', encoding: 'utf8', timeout: 15_000, windowsHide: true })
+  ], { input: JSON.stringify({ title: '会话标题', message: '', open: route, approval: [{ label: '允许', argument: 'allow-route' }] }) + '\n', encoding: 'utf8', timeout: 15_000, windowsHide: true })
   assert.equal(result.status, 0, result.error?.message ?? result.stderr)
-  assert.match(result.stdout, /activationType="background"/)
-  assert.ok(result.stdout.includes(`launch="${route}"`))
+  assert.ok(result.stdout.includes(`<toast activationType="background" launch="${route}">`))
+  assert.match(result.stdout, /<action content="允许" arguments="allow-route" activationType="background"/)
   assert.doesNotMatch(result.stdout, /dsh:\/\/open/)
 })
 

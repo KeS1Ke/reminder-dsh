@@ -13,7 +13,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 800, height: 700 } })
   const errors = []
   page.on('pageerror', error => errors.push(error.message))
-  await page.setContent('<html lang="zh"><head><base href="http://test.local/"></head><body style="font-family:system-ui;margin:40px"><h2>Windows 提醒设置</h2><div id="root"></div></body></html>')
+  await page.setContent('<html lang="zh"><head><base href="http://test.local/dsh/"></head><body style="font-family:system-ui;margin:40px"><h2>Windows 提醒设置</h2><div id="root"></div></body></html>')
   for (const script of ['react/umd/react.development.js', 'react-dom/umd/react-dom.development.js']) {
     await page.addScriptTag({ path: fileURLToPath(new URL('../node_modules/' + script, import.meta.url)) })
   }
@@ -29,14 +29,24 @@ try {
     window.failNext = false
     window.opened = []
     window.fetchUrls = []
-    let served = false
-    window.fetch = url => {
-      window.fetchUrls.push(String(url))
-      if (served) return new Promise(() => {})
-      served = true
-      return Promise.resolve({ ok: true, status: 200, json: async () => ({ sessionId: 'session-jump' }) })
+    window.polls = []
+    let focused = false
+    document.hasFocus = () => focused
+    window.setDshFocus = value => {
+      focused = value
+      window.dispatchEvent(new Event(value ? 'focus' : 'blur'))
     }
-    const uiWorkspace = { openSession: sessionId => window.opened.push(sessionId) }
+    window.fetch = (url, { signal }) => new Promise(resolve => {
+      window.fetchUrls.push(String(url))
+      window.polls.push({ signal, deliver: value => resolve(new Response(JSON.stringify(value), { status: 200 })) })
+    })
+    const uiWorkspace = {
+      openSession: sessionId => {
+        window.opened.push(sessionId)
+        // DSH throws for an id that is no longer in the session catalog; the click must not break the poll.
+        if (sessionId === 'gone-session') throw new Error('sessions.retain: unknown session ' + sessionId)
+      },
+    }
     window.publish = value => {
       snapshot = { ...snapshot, value: { popup: { ...snapshot.value.popup, ...value.popup }, taskbar: { ...snapshot.value.taskbar, ...value.taskbar } } }
       for (const listener of listeners) listener()
@@ -184,9 +194,26 @@ try {
   assert.equal(await toggle.isChecked(), true)
   assert.equal(await summary.isChecked(), true)
   assert.equal(await taskbar.isChecked(), true)
-  await page.waitForFunction(() => window.opened.length > 0)
-  assert.deepEqual(await page.evaluate(() => window.opened), ['session-jump'])
-  assert.match(await page.evaluate(() => window.fetchUrls[0]), /reminder-dsh\/session-open$/)
+  assert.deepEqual(await page.evaluate(() => window.fetchUrls), [])
+  await page.evaluate(() => {
+    window.setDshFocus(true)
+    window.setDshFocus(false)
+    if (!window.polls[0].signal.aborted) throw new Error('Background tab did not cancel its poll')
+    window.polls[0].deliver({ id: 'stale-click', sessionId: 'other-session' })
+    window.setDshFocus(true)
+    window.polls[1].deliver({ id: 'gone-session-click', sessionId: 'gone-session' })
+  })
+  await page.waitForFunction(() => window.fetchUrls.length === 3)
+  // A notification outliving its session must be acknowledged without stopping the follow loop.
+  await page.evaluate(() => window.polls[2].deliver({ id: 'current-click', sessionId: 'session-jump' }))
+  await page.waitForFunction(() => window.fetchUrls.length === 4)
+  assert.deepEqual(await page.evaluate(() => window.opened), ['gone-session', 'session-jump'])
+  assert.deepEqual(await page.evaluate(() => window.fetchUrls), [
+    'http://test.local/dsh/api/reminder-dsh/session-open',
+    'http://test.local/dsh/api/reminder-dsh/session-open',
+    'http://test.local/dsh/api/reminder-dsh/session-open?ack=gone-session-click',
+    'http://test.local/dsh/api/reminder-dsh/session-open?ack=current-click',
+  ])
   assert.deepEqual(errors, [])
   console.log('Settings browser checks passed: bell icon, staged switch save/cancel, atomic write, per-field feedback, refused write, external live update, toast session jump.')
 } finally { await browser.close() }

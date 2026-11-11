@@ -1,33 +1,37 @@
-/** One-slot mailbox: a toast click posts the session id, the GUI's long poll consumes it once. */
+import { randomUUID } from 'node:crypto'
+
+/** Keep the latest toast click until the focused GUI has opened its session. */
 export function createSessionOpenRequests({ timeoutMs = 25_000 } = {}) {
-  let pending
+  let pending, disposed = false
   const waiters = new Set()
 
   return {
     request(sessionId) {
-      if (typeof sessionId !== 'string' || sessionId === '') return
-      pending = sessionId
-      for (const waiter of [...waiters]) waiter()
+      if (disposed || typeof sessionId !== 'string' || sessionId === '') return
+      pending = { id: randomUUID(), sessionId }
+      for (const waiter of waiters) waiter(pending)
     },
-    /** Resolve with a posted session id, or undefined when the caller gives up first. */
-    take() {
-      if (pending !== undefined) {
-        const sessionId = pending
-        pending = undefined
-        return Promise.resolve(sessionId)
-      }
+    take(acknowledgedId, signal) {
+      if (disposed || signal?.aborted) return Promise.resolve()
+      if (pending?.id === acknowledgedId) pending = undefined
+      if (pending) return Promise.resolve(pending)
       return new Promise(resolve => {
-        let timer
-        const settle = () => {
+        const settle = value => {
           clearTimeout(timer)
           waiters.delete(settle)
-          const sessionId = pending
-          pending = undefined
-          resolve(sessionId)
+          signal?.removeEventListener('abort', abort)
+          resolve(value)
         }
+        const abort = () => settle()
+        const timer = setTimeout(abort, timeoutMs)
         waiters.add(settle)
-        timer = setTimeout(settle, timeoutMs)
+        signal?.addEventListener('abort', abort, { once: true })
       })
+    },
+    dispose() {
+      disposed = true
+      pending = undefined
+      for (const waiter of waiters) waiter()
     },
   }
 }
