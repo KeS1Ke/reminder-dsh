@@ -6,11 +6,13 @@ import { createToastReplies } from './reply.js'
 const scriptPath = fileURLToPath(new URL('./toast.ps1', import.meta.url))
 const activatorPath = fileURLToPath(new URL('./activate.ps1', import.meta.url))
 const powershell = win32.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+// Windows shows one banner per notification identity. The next identity stacks a new banner above the previous one.
+const stackIds = ['KeS1Ke.DSH', 'KeS1Ke.DSH.2', 'KeS1Ke.DSH.3', 'KeS1Ke.DSH.4', 'KeS1Ke.DSH.5']
 
 export function createWindowsToast(config, launch = execFile, launchActivator = spawn) {
   const lifetime = new AbortController()
   const replies = createToastReplies()
-  let activator
+  let activator, stackIndex = 0
 
   function startActivator() {
     if (activator) return activator.ready
@@ -57,7 +59,7 @@ export function createWindowsToast(config, launch = execFile, launchActivator = 
   }
 
   return {
-    async notify({ title = config.title, message = config.message, signal, onReply, onDecision, onOpen } = {}) {
+    async notify({ title = config.title, message = config.message, signal, onReply, onDecision, onOpen, sound } = {}) {
       signal = signal ? AbortSignal.any([signal, lifetime.signal]) : lifetime.signal
       if (signal.aborted) return
       if (onReply || onDecision || onOpen) await startActivator()
@@ -89,11 +91,14 @@ export function createWindowsToast(config, launch = execFile, launchActivator = 
           Object.assign(payload, { reply: reply.argument, replyPlaceholder: '回复 DSH', replyLabel: '发送' })
         }
         if (signal.aborted) return
+        payload.appId = stackIds[stackIndex]
+        stackIndex = (stackIndex + 1) % stackIds.length
+        if (typeof sound === 'string' && sound) payload.sound = sound
         await new Promise((resolve, reject) => {
           // Windows PowerShell's .NET Framework provides the WinRT projection used by toast.ps1.
           const child = launch(powershell, [
             '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath,
-          ], { windowsHide: true, timeout: 15_000 }, (error, _stdout, stderr) => {
+          ], { windowsHide: true, timeout: payload.sound ? 22_000 : 15_000 }, (error, _stdout, stderr) => {
             signal.removeEventListener('abort', abort)
             if (signal.aborted) resolve()
             else if (error) reject(new Error(stderr.trim() || error.message, { cause: error }))

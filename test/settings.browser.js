@@ -30,16 +30,33 @@ try {
     window.opened = []
     window.fetchUrls = []
     window.polls = []
+    window.soundPosts = []
+    window.soundDeletes = 0
     let focused = false
     document.hasFocus = () => focused
     window.setDshFocus = value => {
       focused = value
       window.dispatchEvent(new Event(value ? 'focus' : 'blur'))
     }
-    window.fetch = (url, { signal }) => new Promise(resolve => {
-      window.fetchUrls.push(String(url))
-      window.polls.push({ signal, deliver: value => resolve(new Response(JSON.stringify(value), { status: 200 })) })
-    })
+    window.fetch = (url, options = {}) => {
+      const href = String(url)
+      window.fetchUrls.push(href)
+      if (href.includes('api/reminder-dsh/sound')) {
+        const method = options.method ?? 'GET'
+        if (method === 'POST') {
+          window.soundPosts.push(href)
+          return Promise.resolve(new Response(JSON.stringify({ custom: true }), { status: 200 }))
+        }
+        if (method === 'DELETE') {
+          window.soundDeletes += 1
+          return Promise.resolve(new Response(null, { status: 204 }))
+        }
+        return Promise.resolve(new Response(JSON.stringify({ custom: false }), { status: 200 }))
+      }
+      return new Promise(resolve => {
+        window.polls.push({ signal: options.signal, deliver: value => resolve(new Response(JSON.stringify(value), { status: 200 })) })
+      })
+    }
     const uiWorkspace = {
       openSession: sessionId => {
         window.opened.push(sessionId)
@@ -170,6 +187,20 @@ try {
   await popupStatus.filter({ hasText: '已保存，立即生效。' }).waitFor()
   assert.deepEqual(await writes().then(list => list.at(-1)), [{ op: 'set', path: ['popup', 'durationSeconds'], value: 25 }])
 
+  const sound = page.getByRole('switch', { name: '弹窗提示音' })
+  assert.equal(await sound.isChecked(), true)
+  await page.getByText('当前使用默认叮声。').waitFor()
+  await page.locator('input[type="file"]').setInputFiles(fileURLToPath(new URL('../assets/ding.wav', import.meta.url)))
+  await page.getByText('自定义音效已保存，下一条弹窗生效。').waitFor()
+  await page.getByRole('button', { name: '恢复默认叮声' }).click()
+  await page.getByText('已恢复默认叮声。').waitFor()
+  assert.equal(await page.evaluate(() => window.soundPosts.length), 1)
+  assert.equal(await page.evaluate(() => window.soundDeletes), 1)
+  await sound.click()
+  await saveSwitches.click()
+  await barStatus.filter({ hasText: '已保存，立即生效。' }).waitFor()
+  assert.deepEqual(await writes().then(list => list.at(-1)), [{ op: 'set', path: ['popup', 'soundEnabled'], value: false }])
+
   await page.getByLabel('目标窗口标题包含（可选）').fill('测试会话 — DeepSeek Harness')
   await page.getByRole('button', { name: '保存目标窗口' }).click()
   await taskbarStatus.filter({ hasText: '已保存，立即生效。' }).waitFor()
@@ -194,7 +225,7 @@ try {
   assert.equal(await toggle.isChecked(), true)
   assert.equal(await summary.isChecked(), true)
   assert.equal(await taskbar.isChecked(), true)
-  assert.deepEqual(await page.evaluate(() => window.fetchUrls), [])
+  assert.deepEqual(await page.evaluate(() => window.fetchUrls.filter(url => url.includes('session-open'))), [])
   await page.evaluate(() => {
     window.setDshFocus(true)
     window.setDshFocus(false)
@@ -203,12 +234,12 @@ try {
     window.setDshFocus(true)
     window.polls[1].deliver({ id: 'gone-session-click', sessionId: 'gone-session' })
   })
-  await page.waitForFunction(() => window.fetchUrls.length === 3)
+  await page.waitForFunction(() => window.fetchUrls.filter(url => url.includes('session-open')).length === 3)
   // A notification outliving its session must be acknowledged without stopping the follow loop.
   await page.evaluate(() => window.polls[2].deliver({ id: 'current-click', sessionId: 'session-jump' }))
-  await page.waitForFunction(() => window.fetchUrls.length === 4)
+  await page.waitForFunction(() => window.fetchUrls.filter(url => url.includes('session-open')).length === 4)
   assert.deepEqual(await page.evaluate(() => window.opened), ['gone-session', 'session-jump'])
-  assert.deepEqual(await page.evaluate(() => window.fetchUrls), [
+  assert.deepEqual(await page.evaluate(() => window.fetchUrls.filter(url => url.includes('session-open'))), [
     'http://test.local/dsh/api/reminder-dsh/session-open',
     'http://test.local/dsh/api/reminder-dsh/session-open',
     'http://test.local/dsh/api/reminder-dsh/session-open?ack=gone-session-click',

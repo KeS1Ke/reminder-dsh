@@ -26,6 +26,7 @@ Open **Settings → Notifications** in DSH.
 | --- | --- | --- |
 | Windows system notifications | On | Native completion and approval toasts |
 | Show task summary in notifications | On | A short AI summary of the final answer in completion toasts |
+| Notification sound | On | A one-second ding with each toast, or a wav / mp3 upload of up to 5 seconds |
 | Notification interval | 10 seconds | Minimum time between completion toast submissions, from 1 to 300 seconds |
 | Taskbar completion badge | Off | Unread completion count on the DSH taskbar icon |
 | Target window title contains | Blank | Automatic window matching, or a unique title substring you specify |
@@ -35,6 +36,7 @@ Apply switch changes together with **Save** at the bottom of the page. **Cancel*
 ## Notifications and taskbar badge
 
 - **Completion.** A toast follows a successful main-session turn once the session becomes idle. Concurrent completions are queued in order. Subagents, cancelled or failed turns, and restored history are excluded. The session title identifies the conversation, with a configured fallback when no title is available.
+- **Several toasts at once.** The plugin rotates through its own notification identities so Windows stacks a new banner above a banner that is still visible, instead of replacing it. Nothing in Windows itself is modified. A custom sound stays in the current user's plugin folder.
 - **AI summary.** The plugin makes an auxiliary request through the session's configured model and asks for a short Chinese summary of its final text reply. It can add model usage. A failed summary falls back to a labeled excerpt. Disable summaries to skip this request.
 - **Quick reply.** Send one reply per completion toast back to its original session within 24 hours while the original session and backend are available.
 - **Approval.** The toast shows the requesting tool and reason. **Allow** grants the current request once and **Reject** declines it. The toast and the in-session card share the same pending approval.

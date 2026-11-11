@@ -26,7 +26,9 @@ test('the toast child receives UTF-8 JSON with no session data or shell interpol
   const result = createWindowsToast(config, fake.launch).notify({
     sessionId: 'private-session', message: '摘要：' + config.message,
   })
-  assert.deepEqual(JSON.parse(fake.stdin.read().toString('utf8')), { ...config, message: '摘要：' + config.message })
+  assert.deepEqual(JSON.parse(fake.stdin.read().toString('utf8')), {
+    title: config.title, message: '摘要：' + config.message, appId: 'KeS1Ke.DSH',
+  })
   const { exe, args, options } = fake.invocation
   assert.match(exe, /\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe$/)
   assert.match(args.at(-1), /toast\.ps1$/)
@@ -109,6 +111,26 @@ test('Windows shows only the session title when the summary is hidden', { skip: 
   assert.equal(result.status, 0, result.error?.message ?? result.stderr)
   assert.ok(result.stdout.includes('<text hint-maxLines="1">会话标题 &amp; &lt;测试&gt;</text>'))
   assert.equal((result.stdout.match(/<text\b/g) ?? []).length, 1)
+  assert.doesNotMatch(result.stdout, /<audio\b/)
+})
+
+test('a plugin sound silences the Windows toast sound without putting the file in the toast', { skip: process.platform !== 'win32' }, () => {
+  const script = fileURLToPath(new URL('../src/modules/popup/toast.ps1', import.meta.url))
+  const result = spawnSync('powershell.exe', [
+    '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, '-ValidateOnly',
+  ], { input: JSON.stringify({ title: '会话标题', message: '正文', sound: 'C:\\sounds\\ding.wav', appId: 'KeS1Ke.DSH.2' }) + '\n', encoding: 'utf8', timeout: 15_000, windowsHide: true })
+  assert.equal(result.status, 0, result.error?.message ?? result.stderr)
+  assert.match(result.stdout, /<audio silent="true"/)
+  assert.doesNotMatch(result.stdout, /C:\\sounds/)
+})
+
+test('an unexpected notification identity is rejected before a toast is built', { skip: process.platform !== 'win32' }, () => {
+  const script = fileURLToPath(new URL('../src/modules/popup/toast.ps1', import.meta.url))
+  const result = spawnSync('powershell.exe', [
+    '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, '-ValidateOnly',
+  ], { input: JSON.stringify({ title: '会话标题', message: '', appId: 'Other.App' }) + '\n', encoding: 'utf8', timeout: 15_000, windowsHide: true })
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /Unexpected notification identity/)
 })
 
 test('Windows sends the session route to the toast activator and keeps approval actions separate', { skip: process.platform !== 'win32' }, () => {
@@ -193,4 +215,24 @@ test('local reply routes isolate sessions, reject empty text and acknowledge dup
   assert.deepEqual(received, [['second', '第二个会话 🐋'], ['first', '请继续']])
   second.release()
   assert.equal(await send(second, '已经失效'), 'failed')
+})
+
+test('successive toasts rotate identities so a new banner can stack above the previous one', async () => {
+  const payloads = [], timeouts = []
+  const notifier = createWindowsToast(config, (_exe, _args, options, callback) => {
+    timeouts.push(options.timeout)
+    const stdin = new PassThrough()
+    stdin.on('data', chunk => payloads.push(JSON.parse(chunk.toString('utf8'))))
+    queueMicrotask(() => callback(null, '', ''))
+    return { stdin, kill() {} }
+  })
+  for (const [index, message] of ['one', 'two', 'three', 'four', 'five', 'six'].entries()) {
+    await notifier.notify({ message, sound: index === 0 ? 'C:\\sounds\\ding.wav' : undefined })
+  }
+  assert.deepEqual(payloads.map(item => item.appId), [
+    'KeS1Ke.DSH', 'KeS1Ke.DSH.2', 'KeS1Ke.DSH.3', 'KeS1Ke.DSH.4', 'KeS1Ke.DSH.5', 'KeS1Ke.DSH',
+  ])
+  assert.equal(payloads[0].sound, 'C:\\sounds\\ding.wav')
+  assert.equal(payloads[1].sound, undefined)
+  assert.deepEqual(timeouts, [22_000, 15_000, 15_000, 15_000, 15_000, 15_000])
 })

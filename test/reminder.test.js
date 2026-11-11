@@ -98,7 +98,9 @@ test('unload stops reminders', async t => {
 test('configuration validates duration and disabled mode loads', async () => {
   assert.equal(Config({}).durationSeconds.get(), 10)
   assert.equal(Config({}).showSummary.get(), true)
+  assert.equal(Config({}).soundEnabled.get(), true)
   assert.equal(Config({ showSummary: false }).showSummary.get(), false)
+  assert.equal(Config({ soundEnabled: false }).soundEnabled.get(), false)
   for (const durationSeconds of [0, -1, 301, 1.5, '10']) assert.throws(() => Config({ durationSeconds }))
   assert.equal(Config({ enabled: false }).enabled.get(), false)
 })

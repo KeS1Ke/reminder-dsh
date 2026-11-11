@@ -7,3 +7,4 @@
       enabled: true
       durationSeconds: 10
       showSummary: true
+      soundEnabled: true

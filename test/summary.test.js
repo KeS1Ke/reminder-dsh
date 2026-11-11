@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { summarizeCompletion, excerpt } from '../src/modules/popup/summary.js'
 
-const config = { summaryMaxChars: 180, summaryTimeoutSeconds: 2, message: '任务已结束。' }
+const config = { summaryMaxChars: 60, summaryTimeoutSeconds: 2, message: '任务已结束。' }
 const completion = () => ({
   completedText: '已添加快速回复输入框，关闭在左、发送在右。32 项测试通过，Windows 界面尚未实测。',
   route: { provider: 'deepseek', model: 'deepseek-chat' },
@@ -31,7 +31,8 @@ test('uses the session model for an auxiliary summary, keeping failure caveats i
     assert.equal(options.sessionId, 'original-session')
     assert.equal(options.signal, signal)
     assert.equal(JSON.parse(options.messages[0].content[0].text).finalAssistantReply, data.completedText)
-    assert.match(options.system, /压缩在 3 行以内（约 60 字）/)
+    assert.match(options.system, /必须在 3 行以内写完（不超过 60 个字）/)
+    assert.match(options.system, /不要使用省略号/)
     assert.match(options.system, /保留关键失败、未完成事项/)
     assert.equal(options.tools, undefined)
   })
@@ -48,7 +49,17 @@ test('the three-line budget never exceeds a smaller configured character limit',
   ], (route, options) => { prompt = options.system })
   const text = await summarizeCompletion(llm, { ...config, summaryMaxChars: 40 }, completion(), () => {})
   assert.equal(text, '简短总结。')
-  assert.match(prompt, /压缩在 3 行以内（约 40 字）/)
+  assert.match(prompt, /必须在 3 行以内写完（不超过 40 个字）/)
+})
+
+test('a summary past the three-line budget ends on a complete sentence without an ellipsis', async () => {
+  const llm = model([
+    { type: 'text-delta', text: '已完成登录修复。后续仍需验证窗口置顶，这部分已经超出三行预算。' },
+    { type: 'finish', reason: { kind: 'stop' } },
+  ])
+  const text = await summarizeCompletion(llm, { ...config, summaryMaxChars: 20 }, completion(), () => {})
+  assert.equal(text, '已完成登录修复。')
+  assert.equal(text.includes('…'), false)
 })
 
 test('line breaks collapse so the character budget bounds the rendered line count', async () => {

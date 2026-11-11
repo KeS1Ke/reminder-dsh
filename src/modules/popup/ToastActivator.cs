@@ -43,7 +43,7 @@ namespace DshReminder
 
         public int Activate(string appId, string arguments, NotificationInput[] input, uint count)
         {
-            if (appId != "KeS1Ke.DSH" || String.IsNullOrEmpty(arguments)) return 0;
+            if (!KnownApp(appId) || String.IsNullOrEmpty(arguments)) return 0;
             var route = Regex.Match(arguments, @"\A([a-f0-9]{32}):([a-f0-9]{32})(:decision|:open)?\z");
             if (!route.Success) return 0;
             var kind = route.Groups[3].Value;
@@ -80,6 +80,12 @@ namespace DshReminder
                 })) { }
             }
             return 0;
+        }
+
+        // Stacked banners use KeS1Ke.DSH.2 through .5. They share this activator.
+        private static bool KnownApp(string appId)
+        {
+            return appId == "KeS1Ke.DSH" || appId != null && Regex.IsMatch(appId, @"\AKeS1Ke\.DSH\.[2-5]\z");
         }
 
         private static void OpenApp()

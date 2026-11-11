@@ -9,6 +9,10 @@ $payload = if ($ApprovalFailed) {
 } elseif ($ReplyFailed) {
   ConvertFrom-Json '{"title":"DSH \u56de\u590d\u672a\u786e\u8ba4","message":"\u8bf7\u56de\u5230\u539f DSH \u4f1a\u8bdd\u68c0\u67e5\u6d88\u606f\uff0c\u6216\u5728\u90a3\u91cc\u53d1\u9001\u3002"}'
 } else { [Console]::ReadLine() | ConvertFrom-Json }
+# Windows shows one banner per identity. Slots .2-.5 keep an older banner and stack the next one above it.
+$appId = [string]$payload.appId
+if (-not $appId) { $appId = 'KeS1Ke.DSH' }
+if ($appId -notmatch '^KeS1Ke\.DSH(\.[2-5])?$') { throw 'Unexpected notification identity.' }
 $icon = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../../assets/deepseek-harness.png'))
 if (-not [IO.File]::Exists($icon)) { throw 'The DSH notification icon is missing.' }
 $desktop = $null
@@ -72,11 +76,16 @@ if ($payload.reply -or $payload.approval) {
   }
   $null = $xml.DocumentElement.AppendChild($actions)
 }
+if ($payload.sound) {
+  # The plugin plays its own clip. Silence the Windows toast sound so the two do not stack.
+  $audio = $xml.CreateElement('audio')
+  $audio.SetAttribute('silent', 'true')
+  $null = $xml.DocumentElement.AppendChild($audio)
+}
 $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
 if ($ValidateOnly) { $xml.GetXml(); return }
 
 # Register a dedicated per-user sender so CLI and desktop installs use the same identity.
-$appId = 'KeS1Ke.DSH'
 $displayName = 'DeepSeek Harness'
 $activator = '{BD86FD58-A2BF-430E-A8D9-8D20238ED61A}'
 $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("Software\Classes\AppUserModelId\$appId")
@@ -88,7 +97,8 @@ try {
     # Windows resolves the compact header from the app's Start-menu identity.
     $programs = [Environment]::GetFolderPath('Programs')
     $directory = Join-Path $programs 'DeepSeek Harness Notifications'
-    $link = Join-Path $directory 'DeepSeek Harness.lnk'
+    $suffix = if ($appId -eq 'KeS1Ke.DSH') { '' } else { ' ' + ($appId -replace '^KeS1Ke\.DSH\.', '') }
+    $link = Join-Path $directory "DeepSeek Harness$suffix.lnk"
     if (-not [IO.File]::Exists($link) -or $key.GetValue('DesktopShortcutTarget') -ne $desktop) {
       $null = [IO.Directory]::CreateDirectory($directory)
       Add-Type -Path (Join-Path $PSScriptRoot 'ToastIdentity.cs')
@@ -106,5 +116,29 @@ try {
   }
 } finally { $key.Dispose() }
 
+function Play-DshSound([string]$path) {
+  try {
+    if ($path -match '[\r\n"]' -or -not [IO.File]::Exists($path)) { return }
+    if (-not ('DshSound' -as [type])) {
+      Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class DshSound {
+  [DllImport("winmm.dll", CharSet = CharSet.Unicode, EntryPoint = "mciSendStringW")]
+  public static extern int Send(string command, StringBuilder buffer, int bufferSize, IntPtr callback);
+}
+'@
+    }
+    $alias = 'dsh' + [guid]::NewGuid().ToString('N')
+    $type = if ($path -like '*.mp3') { 'mpegvideo' } else { 'waveaudio' }
+    $opened = [DshSound]::Send('open "' + $path + '" type ' + $type + ' alias ' + $alias, $null, 0, [IntPtr]::Zero)
+    if ($opened -ne 0) { return }
+    try { [void][DshSound]::Send('play ' + $alias + ' wait', $null, 0, [IntPtr]::Zero) }
+    finally { [void][DshSound]::Send('close ' + $alias, $null, 0, [IntPtr]::Zero) }
+  } catch {}
+}
+
 $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($appId)
 $notifier.Show($toast)
+if ($payload.sound) { Play-DshSound ([string]$payload.sound) }
