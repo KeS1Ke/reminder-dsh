@@ -1,163 +1,64 @@
 # reminder-dsh
 
-为 DeepSeek Harness 提供 **Windows 原生系统通知**和**任务栏完成角标**，两个模块可在「设置 → 通知」中独立配置。
+在 Windows 上接收 DeepSeek Harness（DSH）的完成提醒和审批请求。通知带有会话标题，可以直接回复原会话或处理当前审批。需要安静一点时，可以单独使用任务栏角标，查看还有多少完成提醒未读。
 
-- **完成通知**：以会话标题为通知标题，可选显示压缩到 3 行的 AI 任务总结，并可在通知里快速回复原会话。
-- **审批通知**：显示会话标题、申请工具和原因，可直接允许或拒绝当前请求。
-- **任务栏角标**：以深色底、白色数字显示未查看的完成数量，切回目标窗口后清零。默认关闭，需要 PowerShell 7。
-- **设置保存**：通知、角标和 AI 总结可分别开关；开关修改后点击页面底部「保存」，保存成功后立即生效，无需重启 DSH。
+[English](https://github.com/KeS1Ke/reminder-dsh/blob/main/README.md) · [npm](https://www.npmjs.com/package/@kesike/reminder-dsh)
 
-[English](README.md)
+## 安装或更新
 
-## 已知问题
-
-- **点击 Windows 提醒弹窗后，还无法正常返回该提醒对应的会话界面。** 源码中已有会话跳转回调，但实际使用中尚未正常工作。请手动打开 DSH，并根据通知中的会话标题进入对应会话；暂时不要依赖完成通知或审批通知的正文点击跳转。
-
-## 要求与安装
-
-- Windows 10/11 本机交互式桌面会话。
-- 系统通知使用 Windows 自带的 `powershell.exe`。任务栏角标需要 PowerShell 7，`pwsh.exe` 须在 PATH 中。
-- Node.js **24.9.0+**，DSH **`>=0.2.2-rc.1 <0.3.0`**。
-
-通知和角标运行在 **DSH 后端所在的 Windows 机器**，需要本机交互式桌面会话。在 Windows 浏览器中访问远程或 WSL/Linux 后端，不会让通知改在浏览器所在机器上发送。
-
-原仓库骨架提到的 DSH `0.1.1-rc.2` 不支持本版采用的动态配置接口，需要升级。实现依据官方源码 [`fcc0ad4`](https://github.com/deepseek-ai/deepseek-harness/tree/fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159)。
+需要 Windows 10/11 本机交互式桌面会话、Node.js 24.9.0+ 和 DSH `>=0.2.2-rc.1 <0.3.0`。系统通知使用 Windows 自带的 `powershell.exe`，任务栏角标需要 PATH 中有 PowerShell 7（`pwsh.exe`）。提醒在 DSH 后端所在的 Windows 机器上出现。
 
 ```powershell
-winget install --id Microsoft.PowerShell --source winget
-pwsh --version
-
-dsh plugin --profile web add @kesike/reminder-dsh
-dsh --profile web
+dsh plugin --profile desktop add @kesike/reminder-dsh
 ```
 
-`@kesike/reminder-dsh` 已发布到 [npm](https://www.npmjs.com/package/@kesike/reminder-dsh)；同一版本也可直接从 GitHub 安装：`dsh plugin --profile web add github:KeS1Ke/reminder-dsh`。
+安装或更新后完全退出并重新打开 DSH Desktop。Web 版请使用实际运行 Windows 后端的 profile，例如 `dsh plugin --profile web add @kesike/reminder-dsh`，然后重启该后端。也可把命令里的包名换成 `github:KeS1Ke/reminder-dsh` 从 GitHub 安装。
 
-将 `web` 替换成你实际使用的 profile。首次安装后重启对应 DSH；之后调整提醒开关和间隔无需重启。如果安装 PowerShell 后仍找不到 pwsh，请重启终端和 DSH，使 PATH 更新。
+## 设置提醒方式
 
-包名 `@kesike/reminder-dsh`，配置条目 ID `dsh-reminder`，与 GitHub 仓库名一致。在当前 profile 安装一次即可，不要在每个 agent 里重复安装。
+打开 DSH 的 **设置 → 通知**。
 
-### 从旧版本升级
-
-0.2.0 之前包名为 `@kesike/dsh-taskbar-reminder`、配置条目 ID 为 `dsh-taskbar-reminder`。升级时先卸载旧包，把 profile 的 `cordis.patch.yml` 中该条目改名为 `dsh-reminder`（`config` 内容保留），再安装新包并重启 DSH。如果安装过旧版独立的 `dsh-winreminder`，也要一并移除，避免重复提醒。系统通知配置位于 `popup` 下，任务栏配置位于 `taskbar` 下。
-
-## 在设置中选择提醒功能
-
-打开设置，在左侧选择 **通知**。
-
-| 模块 / 字段 | 默认值 | 行为 |
+| 设置 | 默认值 | 用途 |
 | --- | --- | --- |
-| Windows 任务栏完成角标 | 关闭 | 主会话完成后在 DSH 任务栏图标角上显示未查看的完成数量（深色圆底白色数字，同 ChatGPT 角标），切回目标窗口后清除。 |
-| 目标窗口标题包含 | 空 | 自动识别 DSH 窗口；可填写更具体的标题文字。 |
-| Windows 系统通知 | 开启 | 通过原生通知显示会话标题、任务总结和待处理审批。 |
-| 在通知中显示任务总结 | 开启 | 通知正文显示压缩在 3 行内的任务总结；关闭后只显示会话标题，并不再调用模型总结。 |
-| 通知发送间隔 | 10 秒 | 控制连续发送的最短间隔，可设为 1–300 秒整数。 |
+| Windows 系统通知 | 开启 | 接收主会话完成和人工审批的原生通知 |
+| 在通知中显示任务总结 | 开启 | 在完成通知正文中加入简短 AI 总结 |
+| 通知发送间隔 | 10 秒 | 两条完成通知提交给 Windows 的最短间隔，可设 1–300 秒 |
+| Windows 任务栏完成角标 | 关闭 | 在目标窗口的任务栏图标上显示未查看完成数 |
+| 目标窗口标题包含 | 空 | 自动识别 DSH 窗口，或填写能唯一匹配的标题文字 |
 
-设置使用 DSH 原生 ConfigForm 和 `.volatile()` 动态引用，保存到当前 profile 的配置覆盖层，不重新挂载插件。三个开关只改动页面上显示的值，需点击页面底部的「保存」才写入（所有未保存开关合并为一次原子提交），「取消」丢弃这些改动；保存成功后页面底部短暂显示「已保存」，失败时保留未保存的值并显示错误，可重试或取消。目标窗口标题和通知间隔仍由各自输入框旁的按钮保存。只读配置、上层覆盖或网络错误导致保存被拒绝时，同样显示失败反馈。
+修改开关后，点击页底的 **保存** 一次应用，点击 **取消** 丢弃未保存修改。窗口标题和发送间隔各有单独的保存按钮。设置保存到当前 profile 后立即生效。
 
-两个模块独立运行。关闭任务栏角标会立即清除角标并退出后台进程，关闭系统通知会取消尚未发送的提醒和通知上的待决审批操作。重新开启后处理新的完成和审批事件。
+## 完成、回复和审批
 
-## 模块一：任务栏完成角标
+- **完成通知**使用会话标题，取不到标题时用配置的备用标题。主会话正常结束并进入空闲才触发。子会话、失败或取消的轮次以及恢复历史会话均不触发完成提醒。多个完成事件按顺序提交。
+- **AI 任务总结**使用会话当前模型，对最后一轮的最终文字回复生成约 3 行的中文总结，可能产生额外模型用量。总结失败时显示带提示的摘录。关闭总结后跳过这次模型调用。
+- **快速回复**把消息送回发出该通知的会话。每条完成通知可回复一次，入口保留 24 小时，要求原会话及后端仍可用。
+- **人工审批**在通知正文中显示申请工具和原因。「允许」仅授予本次请求一次，「拒绝」驳回本次请求。通知按钮与会话内审批卡片处理的是同一个待决请求。
+- **任务栏角标**在目标窗口位于后台时累加未查看完成数。切回目标窗口后清零，超过 99 显示 `99+`。使用 Web 版时，请让 DSH 标签页保持为该浏览器窗口的当前标签页。
 
-通过 `pwsh` 调用 Windows 任务栏角标接口，在 DSH 窗口任务栏图标的角上显示未查看的完成数量，不抢占焦点。角标与 ChatGPT/Codex 的任务栏角标同款：深色圆底（`#26252D`）+ 白色数字，图标填满 Windows 的任务栏角标槽位（该槽位固定为 16px，ChatGPT 用系统原生角标约 18px，已尽量接近），两位数及以上自动扩展为同高胶囊以放得下数字；位置由 Windows 按任务栏方向决定，横向任务栏在图标右下角，竖排任务栏在图标右上角。
+## 点击通知返回会话
 
-每次主会话完成时未查看数加一；多个主会话完成会累计到同一个角标。切回目标窗口（目标窗口成为前台）后角标自动清除，数字同时归零。超过 99 显示 `99+`。已在前台的目标窗口不显示角标。
+点击完成或审批通知正文会请求打开原会话。后端保留最近一次点击，等前台 DSH 界面确认接收。0.2.2 修复了通知激活器继承 Electron Node 模式变量、导致 `dsh://open` 无法正常唤起桌面版的问题。
 
-角标后台进程会轮询前台窗口，切回后退出；为防止异常残留，最长保留 2 小时。默认识别标题中的 `DeepSeek Harness`、`DSH` 或 `DSH Local Build` 产品名，优先选择属于当前 DSH 后端进程祖先的匹配窗口。如果只能通过标题找到多个窗口，不会任意选择，而是记录提示，要求设置更具体的目标窗口标题。
+实际点击仍可能遇到 Windows 回调未送达或窗口未置前。如果没有跳转，请打开 DSH，按通知显示的会话标题找到原会话。更新或重启后请使用新生成的通知，旧通知的跳转和交互入口可能随原后端退出而失效。
 
-浏览器使用场景中，DSH 标签页需要是该浏览器窗口当前显示的标签页，窗口本身可以在后台或最小化。若浏览器已经切到别的标签，自动识别通常找不到 DSH；可填写目标窗口标题，但请保证该文字能唯一定位你要提醒的窗口。该模块不能可靠地通过窗口标题区分同名的多个独立 DSH 实例。
+横幅和通知中心由 Windows 管理。插件使用当前用户的通知身份，检测到 DSH Desktop 时会创建当前用户的开始菜单快捷方式。通知交互通过本机激活器和命名管道交给插件后端。
 
-找不到窗口、匹配不唯一、缺少 pwsh 或系统策略阻止原生调用时，原因会记录在 DSH 日志中。关闭任务栏模块会请求子进程清除角标并退出；进程异常时由超时上限兜底。
+## 配置文件与卸载
 
-## 模块二：Windows 系统通知
+在当前 profile 的 `cordis.patch.yml` 中使用 `dsh-reminder` 条目，分开配置 `popup` 和 `taskbar`。参见 [配置示例](https://github.com/KeS1Ke/reminder-dsh/blob/main/example.patch.yml)。从 `@kesike/dsh-taskbar-reminder` 迁移时，先卸载旧包，将 `dsh-taskbar-reminder` 条目改为 `dsh-reminder` 并保留原配置。如还安装了独立的 `dsh-winreminder`，请移除旧插件以避免重复提醒。
 
-主会话正常结束并进入空闲后，插件以 **DeepSeek Harness** 为发送来源提交原生 Toast。顶部显示应用图标和名称，标题显示会话标题（取不到时使用配置的固定标题）；开启任务总结时正文最多显示三行任务总结和快速回复框，关闭后只显示会话标题。
+卸载时运行 `dsh plugin --profile desktop remove @kesike/reminder-dsh`，将 `desktop` 替换为实际 profile，移除手工添加的 `dsh-reminder` 配置覆盖，然后重启 DSH。
 
-点击通知正文后返回对应会话的功能目前存在[已知问题](#已知问题)。请手动打开 DSH，并根据通知中的会话标题进入对应会话。横幅外观、显示时间和通知中心收录由 Windows 管理，受系统通知与勿扰设置控制。
-
-在通知中输入内容并点击「发送」，Windows 回调会通过本机命名管道将回复交给触发该通知的 DSH 会话。每条通知可回复一次，回复入口在发送后 24 小时内有效，并要求原会话和 DSH 后端仍在运行。遇到回复未确认的提示时，请回到原会话核对后再发送。
-
-当 DSH 请求人工审批时，通知的标题同样是该会话的标题（取不到会话标题时显示「需要审批 · 工具名」），正文首句为「需要审批（工具名）：申请原因」，并带「允许」「拒绝」两个按钮。允许仅授予当前请求一次。通知与会话内审批卡片共用 DSH 的待决请求，任一处处理或取消后，旧通知上的按钮便失效。需要查看完整操作时，请手动进入 DSH 中对应的会话。
-
-桌面版首次发送通知时，插件在当前用户的开始菜单中注册 `DeepSeek Harness Notifications/DeepSeek Harness.lnk`，供 Windows 读取通知顶部的应用名称和图标。快捷方式也可用于打开 DeepSeek Harness。
-
-多个主会话同时完成时，按完成事件顺序提交。发送间隔从上一条提交成功后开始计算，修改后立即重算等待时间。原会话关闭会取消该会话尚未提交的提醒。已提交的通知由 Windows 通知中心管理。
-
-### AI 任务总结
-
-取本次运行最后一轮的最终文字回复，用完成时的会话模型生成简短中文总结，要求压缩在 3 行以内（约 60 字，且不超过 `summaryMaxChars`），保留失败、未完成事项和验证限制。部分 Windows 11 版本会忽略 `hint-maxLines`，因此正文按约 60 字的 3 行预算直接截断。不会使用其他轮次、子会话、思考过程或工具参数。
-
-每次有最终文字回复的正常完成会多一次模型调用，使用 DSH 已配置的提供商和凭据，可能产生额外用量；仅开启任务栏模块时、或关闭「在通知中显示任务总结」时不会发生这次调用。摘要是辅助请求，不追加原会话的用户消息，也不启动新 agent 轮次。
-
-默认等待最多 15 秒、总结最多 60 字符（约 3 行）；超长回复只取首尾合计 12000 字符。超时或失败时明确显示“AI 总结暂不可用”并附最终回复摘录；没有最终文字回复时说明原因并使用备用文案。模型摘要不能替代对实际完成情况的检查。
-
-## 提醒触发条件
-
-两个模块共用主会话完成检测：观察到 `running`，最后一个 `turn/end` 为 `completed`，再进入 `idle`。子代理（`origin: subagent` 或 `delegationDepth > 0`）、取消、报错、阻止执行、输出长度达到上限、历史恢复和重复空闲事件不提醒。普通会话分叉仍算主会话。
-
-这里只表示本轮正常结束并空闲，不保证任务业务目标全部完成。后台工作随后唤醒主会话并再次正常完成时，会产生新的完成事件。
-
-## 文件配置
-
-在当前 profile 的 `cordis.patch.yml` 添加覆盖项：
-
-```yaml
-- id: dsh-reminder
-  config:
-    taskbar:
-      enabled: false
-      windowTitle: ''
-    popup:
-      enabled: true
-      durationSeconds: 10
-      showSummary: true
-      title: DSH 任务完成
-      message: 主会话已完成本轮任务。
-      summaryMaxChars: 60
-      summaryTimeoutSeconds: 15
-```
-
-`taskbar.enabled`、`taskbar.windowTitle`、`popup.enabled`、`popup.durationSeconds`、`popup.showSummary` 支持热更新。`popup.durationSeconds` 现在表示连续通知的发送间隔。其余为普通配置，修改时遵循插件重载。`summaryMaxChars` 为 20–1000（默认 60，超过 60 的部分仍按 3 行预算截断），`summaryTimeoutSeconds` 为 1–60。
-
-## 模块目录
-
-```text
-src/index.js                 组合两个模块、注册热更新
-src/reminder.js              共用主会话完成检测、读取会话标题
-src/modules/taskbar/         原生任务栏完成角标、窗口定位、子进程管理
-src/modules/popup/           AI 总结、发送队列、会话跳转、Windows 原生通知
-lib/index.js                兼容原包入口
-lib/client.js               DSH 设置界面的两个模块配置
-```
-
-## 验证与开发
+## 开发验证
 
 ```powershell
-git clone https://github.com/KeS1Ke/reminder-dsh.git
-cd reminder-dsh
 npm ci --ignore-scripts
 npm test
 npm run test:settings-ui
-npm run test:popup
-npm run test:taskbar
+npm pack --dry-run
 ```
 
-`test:popup` 发送一条示例系统通知，并将测试回复打印到终端。`test:taskbar` 需要有可匹配的 DSH 窗口，可通过 `npm run test:taskbar -- "具体窗口标题"` 指定匹配文字；运行后请切到别的窗口查看角标。
+在 Windows 上用 `npm run test:popup` 发送测试通知，或用 `npm run test:taskbar -- "窗口标题"` 检查角标。设置页浏览器测试可通过 `CHROMIUM_PATH` 指定 Chromium。
 
-自动测试覆盖真实 Cordis Loader 动态更新、模块独立开关、排队和间隔重算、摘要回退、通知标题取值及子进程行为。chromium 测试通过测试夹具验证「通知」注册、铃铛图标、开关的底部保存/取消与原子写入、输入框反馈和保存失败处理，可用 `CHROMIUM_PATH` 指定浏览器。Windows 专用测试验证原生通知载荷和 Win32 辅助代码。
-
-提醒发生在 **DSH 后端所在 Windows 机器**。WSL/Linux 后端、远程 Windows 浏览器连接到别处后端、Windows 服务或无人登录会话不保证有可见提醒。
-
-发布：`npm publish --access public --registry=https://registry.npmjs.org`。若本机默认 registry 是镜像，必须显式指定官方源。
-
-## 卸载
-
-```powershell
-dsh plugin --profile web remove @kesike/reminder-dsh
-```
-
-删除手工添加的 `id: dsh-reminder` 覆盖项并重启 DSH。
-
-## 许可证
-
-插件代码采用 [MIT](LICENSE)。官方图标来源和 DeepSeek 许可见 [assets/README.md](assets/README.md)。这是第三方插件，不是 DeepSeek 官方产品。
+插件代码采用 [MIT](https://github.com/KeS1Ke/reminder-dsh/blob/main/LICENSE) 许可证，图标来源及许可见 [资源说明](https://github.com/KeS1Ke/reminder-dsh/blob/main/assets/README.md)。

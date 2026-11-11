@@ -1,81 +1,68 @@
 # reminder-dsh
 
-Windows native notifications and a taskbar completion badge for DeepSeek Harness. The two modules can be configured independently in **Settings → Notifications**.
+Native Windows reminders for DeepSeek Harness (DSH). Completion and approval toasts use the session title, and you can reply or handle an approval from the notification. An optional taskbar badge counts completions while the DSH window is in the background.
 
-- **Completion notifications:** use the session title as the heading and optionally show an AI summary of the final answer, compressed to three lines. Reply directly to the original session from the notification.
-- **Approval notifications:** show the session title, requesting tool and reason, with **Allow** and **Reject** buttons for the current request.
-- **Taskbar completion badge:** show an unread completion count as a dark badge with white digits. Focusing the target window clears the count. This module defaults off and requires PowerShell 7.
-- **Settings:** independently control notifications, the taskbar badge and AI summaries. Save switch changes with the bottom **Save** button; changes apply without restarting DSH.
+DeepSeek Harness 的 Windows 提醒插件。完成和审批通知以会话标题为标题，支持可选 AI 总结、通知内回复和审批，也可以在任务栏显示未查看的完成数。打开 **设置 → 通知** 即可配置。
 
-[完整中文说明](README.zh-CN.md)
+[简体中文安装与使用说明](https://github.com/KeS1Ke/reminder-dsh/blob/main/README.zh-CN.md) · [npm package](https://www.npmjs.com/package/@kesike/reminder-dsh)
 
-## Known issues
+## Install or update / 安装或更新
 
-- **Clicking a Windows notification does not yet reliably return to the session that notification belongs to.** The source includes a session-open callback, but this interaction is not working correctly in actual use. Open DSH manually and select the session named in the notification. Do not rely on clicking a completion or approval notification to navigate to its session.
-
-## Install
-
-Requires Windows 10/11, Node.js 24.9.0+, and DSH `>=0.2.2-rc.1 <0.3.0`. System notifications use the built-in Windows PowerShell. The taskbar badge requires PowerShell 7 (`pwsh.exe` on PATH).
-
-Notifications and badges run on the Windows machine hosting the DSH backend, in an interactive desktop session. Opening a remote or WSL/Linux-hosted DSH in a Windows browser does not move notification delivery to that browser's machine.
+Requirements are Windows 10 or 11 with an interactive desktop session, Node.js 24.9.0 or later, and DSH `>=0.2.2-rc.1 <0.3.0`. Toasts use the built-in Windows PowerShell. The taskbar badge needs PowerShell 7 (`pwsh.exe` on PATH). Both run on the machine hosting the DSH backend.
 
 ```powershell
-dsh plugin --profile web add @kesike/reminder-dsh
-dsh --profile web
+dsh plugin --profile desktop add @kesike/reminder-dsh
 ```
 
-`@kesike/reminder-dsh` is published on [npm](https://www.npmjs.com/package/@kesike/reminder-dsh). The same version installs straight from GitHub with `dsh plugin --profile web add github:KeS1Ke/reminder-dsh`.
+Restart DSH Desktop after installation or an update. For DSH Web, use the profile that runs your Windows backend, for example `dsh plugin --profile web add @kesike/reminder-dsh`, then restart that backend. For a GitHub install, use `github:KeS1Ke/reminder-dsh` in place of the npm package name.
 
-Replace `web` with your actual profile. Restart after installation; settings changes then apply without restarting. The plugin installs as package `@kesike/reminder-dsh` and registers the profile entry `dsh-reminder`.
+桌面版执行上面的命令后重启 DSH。Web 版请把 `desktop` 换成实际运行 Windows 后端的 profile。系统通知使用 Windows 自带的 PowerShell，任务栏角标需要 PATH 中有 PowerShell 7。
 
-### Upgrading from older names
+## Choose what you see
 
-Versions before 0.2.0 shipped as package `@kesike/dsh-taskbar-reminder` with the profile entry `dsh-taskbar-reminder`. To migrate, remove the old package, rename that entry in your profile's `cordis.patch.yml` to `dsh-reminder` (keep its `config`), then install the current version and restart DSH. Remove any separately installed `dsh-winreminder` package to avoid duplicate reminders.
+Open **Settings → Notifications** in DSH.
 
-## Settings
+| Setting | Default | What it controls |
+| --- | --- | --- |
+| Windows system notifications | On | Native completion and approval toasts |
+| Show task summary in notifications | On | A short AI summary of the final answer in completion toasts |
+| Notification interval | 10 seconds | Minimum time between completion toast submissions, from 1 to 300 seconds |
+| Taskbar completion badge | Off | Unread completion count on the DSH taskbar icon |
+| Target window title contains | Blank | Automatic window matching, or a unique title substring you specify |
 
-Open **Settings → Notifications** from the settings sidebar. Windows system notifications default on. The taskbar completion badge has its own switch and defaults off.
+Apply switch changes together with **Save** at the bottom of the page. **Cancel** discards pending switch changes. The title and interval fields have separate save buttons. Saved settings apply without restarting the plugin.
 
-The notification interval defaults to **10 seconds**, configurable from **1–300 seconds**. It controls the minimum time between consecutive completion notifications. Windows controls banner duration and delivery through its notification settings for **DeepSeek Harness**.
+## Notifications and taskbar badge
 
-To inspect a completion or approval in context, open DSH manually and select the session named in the notification. Notification-body navigation is a [known issue](#known-issues).
+- **Completion.** A toast follows a successful main-session turn once the session becomes idle. Concurrent completions are queued in order. Subagents, cancelled or failed turns, and restored history are excluded. The session title identifies the conversation, with a configured fallback when no title is available.
+- **AI summary.** The plugin makes an auxiliary request through the session's configured model and asks for a short Chinese summary of its final text reply. It can add model usage. A failed summary falls back to a labeled excerpt. Disable summaries to skip this request.
+- **Quick reply.** Send one reply per completion toast back to its original session within 24 hours while the original session and backend are available.
+- **Approval.** The toast shows the requesting tool and reason. **Allow** grants the current request once and **Reject** declines it. The toast and the in-session card share the same pending approval.
+- **Taskbar badge.** Completed turns increase the count while the target window is in the background. Bringing it to the foreground clears the count. Counts above 99 appear as `99+`. For DSH Web, leave the DSH tab selected in its browser window.
 
-**Show task summary in notifications** defaults on: the notification shows the session title plus a task summary compressed to three lines. Turning it off shows only the session title and skips the summary model request. The session title comes from DSH's session-title service and heads every notification, approvals included; when that service has no title for the session the configured title is used.
+## Opening a session from a toast
 
-Completion notifications and taskbar badges only observe successful main-session completion. Subagents, cancelled or failed turns, restored history and duplicate idle events do not trigger completion reminders. Completion notifications are submitted in completion order; approval requests also produce their own notifications.
+Click the body of a completion or approval toast to request its original session. The backend keeps the latest click until the focused DSH interface acknowledges it. Version 0.2.2 fixes an inherited Electron environment variable that could prevent `dsh://open` from starting Desktop in GUI mode.
 
-Quick replies use a Windows activation callback and a local named pipe. Each notification accepts one reply within 24 hours while its original session and backend are running. If DSH cannot confirm delivery, check the original conversation before resending.
+Windows click delivery and foreground activation can still be intermittent. If DSH stays in the background or the session does not switch, open DSH and select the session named in the notification. Test with a fresh toast after upgrading or restarting. Existing toasts can outlive the backend and their local routes.
 
-Approval notifications use the same session title as their heading (falling back to `Needs approval · <tool>`), show the requesting tool and reason in the body, and offer **Allow** and **Reject** buttons. Allow grants only the current request. The notification and the DSH approval card share the same pending decision, so the buttons expire once the request is handled or withdrawn.
+Windows manages banners and Notification Center. The plugin uses a per-user notification identity and, when it finds DSH Desktop, a per-user Start menu shortcut. Interaction routes run through the plugin's local activator and named pipe.
 
-Taskbar badges identify DSH by its window title, preferring windows in the backend's ancestor process tree. A browser must have its DSH tab selected. Set a specific title substring if automatic matching fails or multiple unrelated windows match. Foreground windows show no badge. Each completed main session increments the unread count; focusing the target window clears the badge and the count. Counts above 99 display as **99+**. The helper process clears the badge after two hours as a safety net.
+## Profile configuration and removal
 
-Notification summaries make one auxiliary model request using the session's existing route. They summarize only its final answer and may incur model usage. Failure is labeled and falls back to an excerpt. The summary is compressed to a three-line budget (about 60 characters); some Windows 11 builds ignore `hint-maxLines`, so the text itself is truncated to that budget. No model request is made for taskbar-only mode or when the summary switch is off.
+Profile overrides use the `dsh-reminder` entry in `cordis.patch.yml` with separate `popup` and `taskbar` settings. See [example.patch.yml](https://github.com/KeS1Ke/reminder-dsh/blob/main/example.patch.yml). If you are migrating from `@kesike/dsh-taskbar-reminder`, remove that package and rename its `dsh-taskbar-reminder` entry while keeping its configuration. Remove a separate `dsh-winreminder` install if present to prevent duplicate notifications.
 
-## Modules and configuration
+To remove this plugin, run `dsh plugin --profile desktop remove @kesike/reminder-dsh` with your actual profile name, remove any manual `dsh-reminder` override, and restart DSH.
 
-- `src/modules/taskbar/`: native taskbar completion badge, target selection and process lifecycle.
-- `src/modules/popup/`: summaries, submission queue, session-open mailbox and native Windows toast delivery.
-- `src/reminder.js`: shared main-session completion detection and session-title lookup.
-- `lib/client.js`: settings for both modules, using DSH ConfigForms.
+## Development
 
-See [example.patch.yml](example.patch.yml) for the nested `taskbar` / `popup` configuration. Existing `popup` settings carry over, and `popup.durationSeconds` now controls the submission interval. The three switches only change the values shown on the page. Click **Save** at the bottom of the page to write them (every pending switch is submitted as one atomic change), or **Cancel** to discard them. A successful save briefly confirms itself; a refused save keeps the pending values and shows the error so you can retry or cancel. The target window title and the notification interval keep their own save buttons. All writes persist through DSH's profile configuration without remounting the plugin.
-
-## Validation
-
-```sh
+```powershell
 npm ci --ignore-scripts
 npm test
 npm run test:settings-ui
 npm pack --dry-run
 ```
 
-On Windows, `npm run test:popup` sends a sample system notification and prints a test reply to the terminal. `npm run test:taskbar -- "specific window title"` checks the taskbar badge; switch away from DSH to see it. Set `CHROMIUM_PATH` for the settings-component browser test if necessary.
+Use `npm run test:popup` for a sample Windows toast and `npm run test:taskbar -- "window title"` for a native badge check. Set `CHROMIUM_PATH` if the settings test needs a specific Chromium executable.
 
-Automated checks include Cordis Loader hot updates, independent module selection, queue scheduling, notification title selection, model-failure handling and subprocess control. The browser check covers the staged switch save/cancel bar, its atomic write and refused writes. Windows-only checks cover the native toast payload and Win32 helper. Notifications are delivered on the Windows backend machine.
-
-Publish a release with `npm publish --access public --registry=https://registry.npmjs.org`; the explicit registry is required whenever the configured default is a mirror.
-
-## License
-
-[MIT](LICENSE). The unchanged official whale icon includes its [upstream license and source](assets/README.md). This is a third-party plugin.
+Source and icon licensing are available in the [repository](https://github.com/KeS1Ke/reminder-dsh). The plugin is distributed under [MIT](https://github.com/KeS1Ke/reminder-dsh/blob/main/LICENSE).
