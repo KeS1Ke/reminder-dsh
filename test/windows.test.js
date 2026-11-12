@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { PassThrough } from 'node:stream'
+import { EventEmitter } from 'node:events'
 import { spawnSync } from 'node:child_process'
 import { createConnection } from 'node:net'
 import { fileURLToPath } from 'node:url'
@@ -177,6 +178,45 @@ test('the toast activator C# compiles under Windows PowerShell', { skip: process
   const result = spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
     `Add-Type -Path '${path.replace(/'/g, "''")}'`], { encoding: 'utf8', timeout: 30_000, windowsHide: true })
   assert.equal(result.status, 0, result.error?.message ?? result.stderr)
+})
+
+test('Enter sends a toast reply and Shift+Enter keeps the newline', { skip: process.platform !== 'win32' }, () => {
+  const path = fileURLToPath(new URL('../src/modules/popup/ToastActivator.cs', import.meta.url))
+  const result = spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
+    `Add-Type -Path '${path.replace(/'/g, "''")}'; ` +
+    `[DshReminder.ReplyKeys]::ShouldSend($false,$false,$false,$true); ` +
+    `[DshReminder.ReplyKeys]::ShouldSend($true,$false,$false,$true); ` +
+    `[DshReminder.ReplyKeys]::ShouldSend($false,$true,$false,$true); ` +
+    `[DshReminder.ReplyKeys]::ShouldSend($false,$false,$true,$true); ` +
+    `[DshReminder.ReplyKeys]::ShouldSend($false,$false,$false,$false)`],
+  { encoding: 'utf8', timeout: 30_000, windowsHide: true })
+  assert.equal(result.status, 0, result.error?.message ?? result.stderr)
+  const lines = result.stdout.replace(/^\uFEFF/, '').trim().split(/\r?\n/)
+  assert.deepEqual(lines, ['True', 'False', 'False', 'False', 'False'])
+})
+
+test('a reply toast arms Enter-to-send and releases it with the route', async () => {
+  const fake = fakeLaunch()
+  const chunks = []
+  const stdin = new PassThrough()
+  const stdout = new PassThrough()
+  const stderr = new PassThrough()
+  for (const stream of [stdin, stdout, stderr]) stream.unref = () => {}
+  stdin.on('data', chunk => chunks.push(Buffer.from(chunk)))
+  const notifier = createWindowsToast(config, fake.launch, () => {
+    const child = new EventEmitter()
+    Object.assign(child, { stdin, stdout, stderr, kill() {}, unref() {} })
+    process.nextTick(() => stdout.write('ready\n'))
+    return child
+  })
+  const pending = notifier.notify({ onReply() {} })
+  for (let i = 0; i < 50 && !fake.invocation; i++) await new Promise(resolve => setImmediate(resolve))
+  assert.ok(fake.invocation)
+  assert.equal(Buffer.concat(chunks).toString(), 'reply-keys\n')
+  fake.finish(null, '', '')
+  await pending
+  notifier.dispose()
+  assert.equal(Buffer.concat(chunks).toString(), 'reply-keys\nreply-keys-off\n')
 })
 
 test('Windows renders distinct native approval actions without a text input', { skip: process.platform !== 'win32' }, () => {

@@ -6,6 +6,7 @@ using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 
 namespace DshReminder
 {
@@ -129,8 +130,19 @@ namespace DshReminder
             {
                 uint registration;
                 Marshal.ThrowExceptionForHR(CoRegisterClassObject(ref clsid, new Factory(), localServer, multipleUse, out registration));
-                try { Console.WriteLine("ready"); Console.ReadLine(); }
-                finally { CoRevokeClassObject(registration); }
+                ReplyKeys.Start();
+                try
+                {
+                    Console.WriteLine("ready");
+                    // Keep reading until the backend closes stdin. Reply toasts arm Enter-to-send while they live.
+                    string line;
+                    while ((line = Console.ReadLine()) != null)
+                    {
+                        if (line == "reply-keys") ReplyKeys.Arm();
+                        else if (line == "reply-keys-off") ReplyKeys.Disarm();
+                    }
+                }
+                finally { ReplyKeys.Stop(); CoRevokeClassObject(registration); }
             }
             finally { CoUninitialize(); }
         }
@@ -155,5 +167,187 @@ namespace DshReminder
         [DllImport("ole32.dll")] private static extern int CoRegisterClassObject(ref Guid clsid,
             [MarshalAs(UnmanagedType.Interface)] IClassFactory factory, uint context, uint flags, out uint registration);
         [DllImport("ole32.dll")] private static extern int CoRevokeClassObject(uint registration);
+    }
+
+    // Windows draws the toast text box and only sends on Ctrl+Enter. This hook remaps a plain Enter
+    // in that box to the shell shortcut. Shift+Enter is left alone so the box can insert a newline.
+    public static class ReplyKeys
+    {
+        const int Enter = 0x0D, Shift = 0x10, Ctrl = 0x11, Alt = 0x12;
+        const int KeyDown = 0x0100, KeyUpFlag = 2, Injected = 0x10;
+        const uint SendMessageId = 0x8001;
+
+        static int armed;
+        static bool pending;
+        static uint threadId;
+        static IntPtr hook;
+        static IntPtr seenHwnd;
+        static bool seenNotification;
+        static Thread thread;
+        static readonly ManualResetEvent ready = new ManualResetEvent(false);
+        static readonly HookProc proc = OnKey;
+
+        public static bool ShouldSend(bool shift, bool ctrl, bool alt, bool hasText)
+        {
+            return hasText && !shift && !ctrl && !alt;
+        }
+
+        public static void Arm() { Interlocked.Increment(ref armed); }
+        public static void Disarm()
+        {
+            if (Interlocked.Decrement(ref armed) < 0) Interlocked.Exchange(ref armed, 0);
+        }
+
+        public static void Start()
+        {
+            thread = new Thread(Loop);
+            thread.IsBackground = true;
+            thread.Start();
+            ready.WaitOne(5000);
+        }
+
+        public static void Stop()
+        {
+            if (threadId != 0) PostThreadMessage(threadId, 0x0012, IntPtr.Zero, IntPtr.Zero);
+            if (thread != null) thread.Join(1000);
+            thread = null;
+        }
+
+        static void Loop()
+        {
+            try
+            {
+                MSG discard;
+                PeekMessage(out discard, IntPtr.Zero, 0, 0, 0);
+                threadId = GetCurrentThreadId();
+                hook = SetWindowsHookEx(13, proc, IntPtr.Zero, 0);
+                ready.Set();
+                if (hook == IntPtr.Zero) return;
+                MSG msg;
+                while (GetMessage(out msg, IntPtr.Zero, 0, 0) > 0)
+                {
+                    if (msg.message == SendMessageId) TapCtrlEnter();
+                    else { TranslateMessage(ref msg); DispatchMessage(ref msg); }
+                }
+            }
+            catch { ready.Set(); }
+            finally { if (hook != IntPtr.Zero) UnhookWindowsHookEx(hook); }
+        }
+
+        static IntPtr OnKey(int code, IntPtr wParam, IntPtr lParam)
+        {
+            try
+            {
+                if (code >= 0 && SwallowEnter(wParam, lParam))
+                {
+                    PostThreadMessage(threadId, SendMessageId, IntPtr.Zero, IntPtr.Zero);
+                    return (IntPtr)1;
+                }
+            }
+            catch { }
+            return CallNextHookEx(hook, code, wParam, lParam);
+        }
+
+        static bool SwallowEnter(IntPtr wParam, IntPtr lParam)
+        {
+            int message = wParam.ToInt32();
+            if (message != KeyDown) return false;
+            Kbd key = (Kbd)Marshal.PtrToStructure(lParam, typeof(Kbd));
+            if ((key.flags & Injected) != 0) return false;
+            if (Volatile.Read(ref armed) <= 0) { pending = false; return false; }
+            IntPtr foreground = GetForegroundWindow();
+            bool notification = IsNotificationWindow(foreground);
+            bool ctrl = Down(Ctrl), alt = Down(Alt), shift = Down(Shift);
+            if (!notification) { pending = false; return false; }
+            if (key.vkCode != Enter)
+            {
+                if (IsTextKey(key.vkCode, ctrl)) pending = true;
+                return false;
+            }
+            if (!ShouldSend(shift, ctrl, alt, pending)) return false;
+            if (Composing(foreground)) return false;
+            pending = false;
+            return true;
+        }
+
+        static bool IsTextKey(uint vk, bool ctrl)
+        {
+            if (ctrl) return vk == 0x56;
+            if (vk >= 0x30 && vk <= 0x39) return true;
+            if (vk >= 0x41 && vk <= 0x5A) return true;
+            if (vk >= 0x60 && vk <= 0x6F) return true;
+            if (vk == 0x08 || vk == 0x20 || vk == 0x2E) return true;
+            if (vk >= 0xBA && vk <= 0xC0) return true;
+            if (vk >= 0xDB && vk <= 0xDE) return true;
+            return vk == 0xE7;
+        }
+
+        static bool IsNotificationWindow(IntPtr hwnd)
+        {
+            if (hwnd == IntPtr.Zero) return false;
+            if (hwnd == seenHwnd) return seenNotification;
+            seenHwnd = hwnd;
+            seenNotification = false;
+            var cls = new StringBuilder(64);
+            GetClassName(hwnd, cls, cls.Capacity);
+            if (cls.ToString() != "Windows.UI.Core.CoreWindow") return false;
+            uint pid;
+            GetWindowThreadProcessId(hwnd, out pid);
+            try { seenNotification = Process.GetProcessById((int)pid).ProcessName == "ShellExperienceHost"; }
+            catch { seenNotification = false; }
+            return seenNotification;
+        }
+
+        static bool Composing(IntPtr hwnd)
+        {
+            IntPtr context = ImmGetContext(hwnd);
+            if (context == IntPtr.Zero) return false;
+            try { return ImmGetCompositionString(context, 0x0008, IntPtr.Zero, 0) > 0; }
+            finally { ImmReleaseContext(hwnd, context); }
+        }
+
+        static bool Down(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
+
+        static void TapCtrlEnter()
+        {
+            keybd_event(Ctrl, 0, 0, UIntPtr.Zero);
+            keybd_event(Enter, 0, 0, UIntPtr.Zero);
+            keybd_event(Enter, 0, KeyUpFlag, UIntPtr.Zero);
+            keybd_event(Ctrl, 0, KeyUpFlag, UIntPtr.Zero);
+        }
+
+        delegate IntPtr HookProc(int code, IntPtr wParam, IntPtr lParam);
+        [StructLayout(LayoutKind.Sequential)]
+        struct Kbd { public uint vkCode, scanCode, flags, time; public UIntPtr extra; }
+        [StructLayout(LayoutKind.Sequential)]
+        struct POINT { public int x, y; }
+        [StructLayout(LayoutKind.Sequential)]
+        struct MSG
+        {
+            public IntPtr hwnd;
+            public uint message;
+            public IntPtr wParam;
+            public IntPtr lParam;
+            public uint time;
+            public POINT pt;
+        }
+
+        [DllImport("user32.dll")] static extern IntPtr SetWindowsHookEx(int id, HookProc proc, IntPtr module, uint thread);
+        [DllImport("user32.dll")] static extern bool UnhookWindowsHookEx(IntPtr hook);
+        [DllImport("user32.dll")] static extern IntPtr CallNextHookEx(IntPtr hook, int code, IntPtr wParam, IntPtr lParam);
+        [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll")] static extern short GetAsyncKeyState(int vk);
+        [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr hwnd, StringBuilder cls, int count);
+        [DllImport("user32.dll")] static extern bool PeekMessage(out MSG msg, IntPtr hwnd, uint min, uint max, uint remove);
+        [DllImport("user32.dll")] static extern int GetMessage(out MSG msg, IntPtr hwnd, uint min, uint max);
+        [DllImport("user32.dll")] static extern bool TranslateMessage(ref MSG msg);
+        [DllImport("user32.dll")] static extern IntPtr DispatchMessage(ref MSG msg);
+        [DllImport("user32.dll")] static extern bool PostThreadMessage(uint thread, uint msg, IntPtr wParam, IntPtr lParam);
+        [DllImport("user32.dll")] static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+        [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+        [DllImport("imm32.dll")] static extern IntPtr ImmGetContext(IntPtr hwnd);
+        [DllImport("imm32.dll")] static extern bool ImmReleaseContext(IntPtr hwnd, IntPtr context);
+        [DllImport("imm32.dll")] static extern int ImmGetCompositionString(IntPtr context, uint index, IntPtr buffer, uint length);
     }
 }

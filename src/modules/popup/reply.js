@@ -61,15 +61,21 @@ export function createToastReplies() {
 
   function add(route, signal, suffix) {
     const token = randomBytes(16).toString('hex')
-    const release = () => {
-      signal?.removeEventListener('abort', release)
-      clearTimeout(timer)
-      routes.delete(token)
+    // Callers can replace entry.release; the timer and abort path must see that replacement.
+    const entry = {
+      ...route,
+      argument: `${pipeId}:${token}${suffix}`,
+      release() {
+        signal?.removeEventListener('abort', onAbort)
+        clearTimeout(timer)
+        routes.delete(token)
+      },
     }
-    const timer = setTimeout(release, replyLifetimeMs).unref()
-    routes.set(token, { ...route, release })
-    signal?.addEventListener('abort', release, { once: true })
-    return { argument: `${pipeId}:${token}${suffix}`, release }
+    function onAbort() { entry.release() }
+    const timer = setTimeout(() => entry.release(), replyLifetimeMs).unref()
+    routes.set(token, entry)
+    signal?.addEventListener('abort', onAbort, { once: true })
+    return entry
   }
 
   return {

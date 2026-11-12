@@ -14,6 +14,13 @@ export function createWindowsToast(config, launch = execFile, launchActivator = 
   const replies = createToastReplies()
   let activator, stackIndex = 0
 
+  // The shell sends a toast reply with Ctrl+Enter and inserts a newline on Enter.
+  function setReplyKeys(on) {
+    const stdin = activator && activator.child && activator.child.stdin
+    if (!stdin || !stdin.writable) return
+    stdin.write(on ? 'reply-keys\n' : 'reply-keys-off\n')
+  }
+
   function startActivator() {
     if (activator) return activator.ready
     const env = { ...process.env }
@@ -87,6 +94,14 @@ export function createWindowsToast(config, launch = execFile, launchActivator = 
         } else if (onReply) {
           const reply = await replies.register(onReply)
           if (!reply) return
+          const release = reply.release
+          let armed = true
+          reply.release = () => {
+            if (armed) setReplyKeys(false)
+            armed = false
+            release()
+          }
+          setReplyKeys(true)
           routes.push(reply)
           Object.assign(payload, { reply: reply.argument, replyPlaceholder: '回复 DSH', replyLabel: '发送' })
         }
