@@ -120,7 +120,11 @@ namespace DshReminder
             }
         }
 
-        public static void Run(Guid clsid, string powershell, string script)
+        private static uint classRegistration;
+        private static bool comReady;
+
+        // The toast host process calls Serve once. It keeps this COM server for every later banner.
+        public static void Serve(Guid clsid, string powershell, string script)
         {
             const uint localServer = 4, multipleUse = 1;
             launcher = powershell;
@@ -130,21 +134,24 @@ namespace DshReminder
             {
                 uint registration;
                 Marshal.ThrowExceptionForHR(CoRegisterClassObject(ref clsid, new Factory(), localServer, multipleUse, out registration));
+                classRegistration = registration;
+                comReady = true;
                 ReplyKeys.Start();
-                try
-                {
-                    Console.WriteLine("ready");
-                    // Keep reading until the backend closes stdin. Reply toasts arm Enter-to-send while they live.
-                    string line;
-                    while ((line = Console.ReadLine()) != null)
-                    {
-                        if (line == "reply-keys") ReplyKeys.Arm();
-                        else if (line == "reply-keys-off") ReplyKeys.Disarm();
-                    }
-                }
-                finally { ReplyKeys.Stop(); CoRevokeClassObject(registration); }
             }
-            finally { CoUninitialize(); }
+            catch
+            {
+                CoUninitialize();
+                throw;
+            }
+        }
+
+        public static void Shutdown()
+        {
+            ReplyKeys.Stop();
+            if (!comReady) return;
+            CoRevokeClassObject(classRegistration);
+            CoUninitialize();
+            comReady = false;
         }
 
         [ComVisible(true), ClassInterface(ClassInterfaceType.None)]
@@ -177,13 +184,17 @@ namespace DshReminder
         const int KeyDown = 0x0100, KeyUpFlag = 2, Injected = 0x10;
         const uint SendMessageId = 0x8001;
 
+        const uint Reevaluate = 0x8002;
+
         static int armed;
         static bool pending;
         static uint threadId;
         static IntPtr hook;
+        static IntPtr foregroundHook;
         static IntPtr seenHwnd;
         static bool seenNotification;
         static Thread thread;
+        static WinEventDelegate foregroundDelegate;
         static readonly ManualResetEvent ready = new ManualResetEvent(false);
         static readonly HookProc proc = OnKey;
 
@@ -192,10 +203,11 @@ namespace DshReminder
             return hasText && !shift && !ctrl && !alt;
         }
 
-        public static void Arm() { Interlocked.Increment(ref armed); }
+        public static void Arm() { Interlocked.Increment(ref armed); Nudge(); }
         public static void Disarm()
         {
             if (Interlocked.Decrement(ref armed) < 0) Interlocked.Exchange(ref armed, 0);
+            Nudge();
         }
 
         public static void Start()
@@ -213,6 +225,32 @@ namespace DshReminder
             thread = null;
         }
 
+        // The keyboard hook exists only while a reply is armed and the notification UI is in front.
+        static void InstallIfNeeded()
+        {
+            if (Volatile.Read(ref armed) <= 0) pending = false;
+            bool want = Volatile.Read(ref armed) > 0 && IsNotificationWindow(GetForegroundWindow());
+            if (want)
+            {
+                if (hook == IntPtr.Zero) hook = SetWindowsHookEx(13, proc, IntPtr.Zero, 0);
+            }
+            else if (hook != IntPtr.Zero)
+            {
+                UnhookWindowsHookEx(hook);
+                hook = IntPtr.Zero;
+            }
+        }
+
+        static void Nudge()
+        {
+            if (threadId != 0) PostThreadMessage(threadId, Reevaluate, IntPtr.Zero, IntPtr.Zero);
+        }
+
+        static void OnForeground(IntPtr eventHook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint eventThread, uint time)
+        {
+            if (idObject == 0) InstallIfNeeded();
+        }
+
         static void Loop()
         {
             try
@@ -220,18 +258,24 @@ namespace DshReminder
                 MSG discard;
                 PeekMessage(out discard, IntPtr.Zero, 0, 0, 0);
                 threadId = GetCurrentThreadId();
-                hook = SetWindowsHookEx(13, proc, IntPtr.Zero, 0);
+                foregroundDelegate = OnForeground;
+                foregroundHook = SetWinEventHook(0x0003, 0x0003, IntPtr.Zero, foregroundDelegate, 0, 0, 0);
+                InstallIfNeeded();
                 ready.Set();
-                if (hook == IntPtr.Zero) return;
                 MSG msg;
                 while (GetMessage(out msg, IntPtr.Zero, 0, 0) > 0)
                 {
-                    if (msg.message == SendMessageId) TapCtrlEnter();
+                    if (msg.message == Reevaluate) InstallIfNeeded();
+                    else if (msg.message == SendMessageId) TapCtrlEnter();
                     else { TranslateMessage(ref msg); DispatchMessage(ref msg); }
                 }
             }
             catch { ready.Set(); }
-            finally { if (hook != IntPtr.Zero) UnhookWindowsHookEx(hook); }
+            finally
+            {
+                if (hook != IntPtr.Zero) UnhookWindowsHookEx(hook);
+                if (foregroundHook != IntPtr.Zero) UnhookWinEvent(foregroundHook);
+            }
         }
 
         static IntPtr OnKey(int code, IntPtr wParam, IntPtr lParam)
@@ -317,6 +361,7 @@ namespace DshReminder
         }
 
         delegate IntPtr HookProc(int code, IntPtr wParam, IntPtr lParam);
+        delegate void WinEventDelegate(IntPtr eventHook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint eventThread, uint time);
         [StructLayout(LayoutKind.Sequential)]
         struct Kbd { public uint vkCode, scanCode, flags, time; public UIntPtr extra; }
         [StructLayout(LayoutKind.Sequential)]
@@ -334,6 +379,8 @@ namespace DshReminder
 
         [DllImport("user32.dll")] static extern IntPtr SetWindowsHookEx(int id, HookProc proc, IntPtr module, uint thread);
         [DllImport("user32.dll")] static extern bool UnhookWindowsHookEx(IntPtr hook);
+        [DllImport("user32.dll")] static extern IntPtr SetWinEventHook(uint min, uint max, IntPtr module, WinEventDelegate callback, uint pid, uint tid, uint flags);
+        [DllImport("user32.dll")] static extern bool UnhookWinEvent(IntPtr hook);
         [DllImport("user32.dll")] static extern IntPtr CallNextHookEx(IntPtr hook, int code, IntPtr wParam, IntPtr lParam);
         [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
         [DllImport("user32.dll")] static extern short GetAsyncKeyState(int vk);

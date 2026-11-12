@@ -9,56 +9,74 @@ import { createWindowsToast } from '../src/modules/popup/toast.js'
 import { createToastReplies } from '../src/modules/popup/reply.js'
 
 const config = { title: '中文 " $() ` 标题', message: "任务完成 & <已就绪> 🐋\n'hello'" }
-function fakeLaunch() {
+function fakeHost({ fail } = {}) {
   const stdin = new PassThrough()
-  let invocation, finish
-  const child = { stdin, killed: false, kill() { this.killed = true } }
-  return { child, stdin, get invocation() { return invocation }, finish: (...args) => finish(...args),
-    launch(exe, args, options, callback) {
+  const stdout = new PassThrough()
+  const stderr = new PassThrough()
+  let buffer = ''
+  const payloads = []
+  const child = Object.assign(new EventEmitter(), {
+    stdin, stdout, stderr, killed: false,
+    kill() { this.killed = true; this.emit('close', 0) },
+    unref() {},
+  })
+  let invocation, launches = 0
+  return { child, stdin, payloads, get invocation() { return invocation }, get launches() { return launches },
+    launch(exe, args, options) {
       invocation = { exe, args, options }
-      finish = callback
+      launches += 1
+      process.nextTick(() => stdout.write('ready\n'))
+      stdin.on('data', chunk => {
+        buffer += chunk.toString('utf8')
+        let index
+        while ((index = buffer.indexOf('\n')) >= 0) {
+          const line = buffer.slice(0, index)
+          buffer = buffer.slice(index + 1)
+          if (!line.startsWith('{')) continue
+          payloads.push(JSON.parse(line))
+          stdout.write(fail ? `error ${fail}\n` : 'ok\n')
+        }
+      })
       return child
     },
   }
 }
 
-test('the toast child receives UTF-8 JSON with no session data or shell interpolation', async () => {
-  const fake = fakeLaunch()
-  const result = createWindowsToast(config, fake.launch).notify({
-    sessionId: 'private-session', message: '摘要：' + config.message,
-  })
-  assert.deepEqual(JSON.parse(fake.stdin.read().toString('utf8')), {
+test('the toast host receives UTF-8 JSON with no session data or shell interpolation', async () => {
+  const fake = fakeHost()
+  const notifier = createWindowsToast(config, fake.launch)
+  const result = notifier.notify({ sessionId: 'private-session', message: '摘要：' + config.message })
+  while (fake.payloads.length < 1) await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(fake.payloads[0], {
     title: config.title, message: '摘要：' + config.message, appId: 'KeS1Ke.DSH',
   })
   const { exe, args, options } = fake.invocation
   assert.match(exe, /\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe$/)
-  assert.match(args.at(-1), /toast\.ps1$/)
+  assert.match(args.at(-2), /toast\.ps1$/)
+  assert.equal(args.at(-1), '-HostMode')
   assert.equal(args.includes(config.title), false)
   assert.equal(options.windowsHide, true)
-  assert.equal(options.timeout, 15_000)
-  fake.finish(null, '', '')
+  assert.equal(options.timeout, undefined)
   await result
+  notifier.dispose()
 })
 
-test('toast process failures report stderr or the launch error', async () => {
-  for (const stderr of ['', 'Windows desktop unavailable']) {
-    const fake = fakeLaunch()
-    const result = createWindowsToast(config, fake.launch).notify()
-    fake.finish(new Error('spawn failed'), '', stderr)
-    await assert.rejects(result, { message: stderr || 'spawn failed' })
-  }
+test('toast host failures report the host error line or the launch error', async () => {
+  const fake = fakeHost({ fail: 'Windows desktop unavailable' })
+  await assert.rejects(createWindowsToast(config, fake.launch).notify(), { message: 'Windows desktop unavailable' })
+  await assert.rejects(createWindowsToast(config, () => { throw new Error('spawn failed') }).notify(), { message: 'spawn failed' })
 })
 
-test('the activator can relaunch Desktop from an Electron Host running as Node', { timeout: 5_000 }, async t => {
+test('the toast host can relaunch Desktop from an Electron Host running as Node', { timeout: 5_000 }, async t => {
   const previous = process.env.ELECTRON_RUN_AS_NODE
   process.env.ELECTRON_RUN_AS_NODE = '1'
   t.after(() => {
     if (previous === undefined) delete process.env.ELECTRON_RUN_AS_NODE
     else process.env.ELECTRON_RUN_AS_NODE = previous
   })
-  const stopped = new Error('test activator stopped before launch')
+  const stopped = new Error('test host stopped before launch')
   let environment
-  const notifier = createWindowsToast(config, () => assert.fail('unexpected toast submission'), (_exe, _args, options) => {
+  const notifier = createWindowsToast(config, (_exe, _args, options) => {
     environment = options.env
     throw stopped
   })
@@ -69,24 +87,16 @@ test('the activator can relaunch Desktop from an Electron Host running as Node',
   assert.equal(process.env.ELECTRON_RUN_AS_NODE, '1')
 })
 
-for (const cancel of ['session', 'plugin']) {
-  test(`${cancel} cancellation aborts the child and prevents another launch`, async () => {
-    const fake = fakeLaunch(), controller = new AbortController()
-    const notifier = createWindowsToast(config, fake.launch)
-    let finished = false
-    const result = notifier.notify({ signal: controller.signal }).then(() => { finished = true })
-    if (cancel === 'session') controller.abort()
-    else notifier.dispose()
-    const invocation = fake.invocation
-    assert.equal(fake.child.killed, true)
-    await Promise.resolve()
-    assert.equal(finished, false)
-    fake.finish(new Error('aborted'), '', '')
-    await result
-    await notifier.notify({ signal: controller.signal })
-    assert.equal(fake.invocation, invocation)
-  })
-}
+test('disposing the plugin stops the toast host and does not start another for a cancelled notify', async () => {
+  const fake = fakeHost(), controller = new AbortController()
+  const notifier = createWindowsToast(config, fake.launch)
+  const result = notifier.notify({ signal: controller.signal })
+  notifier.dispose()
+  await result
+  assert.equal(fake.child.killed, true)
+  await notifier.notify({ signal: controller.signal })
+  assert.equal(fake.launches, 1)
+})
 
 test('Windows builds a full-width toast and links the native Send button to the reply input', { skip: process.platform !== 'win32' }, () => {
   const script = fileURLToPath(new URL('../src/modules/popup/toast.ps1', import.meta.url))
@@ -196,27 +206,27 @@ test('Enter sends a toast reply and Shift+Enter keeps the newline', { skip: proc
 })
 
 test('a reply toast arms Enter-to-send and releases it with the route', async () => {
-  const fake = fakeLaunch()
   const chunks = []
   const stdin = new PassThrough()
   const stdout = new PassThrough()
   const stderr = new PassThrough()
   for (const stream of [stdin, stdout, stderr]) stream.unref = () => {}
   stdin.on('data', chunk => chunks.push(Buffer.from(chunk)))
-  const notifier = createWindowsToast(config, fake.launch, () => {
+  const notifier = createWindowsToast(config, () => {
     const child = new EventEmitter()
-    Object.assign(child, { stdin, stdout, stderr, kill() {}, unref() {} })
+    Object.assign(child, { stdin, stdout, stderr, kill() { this.killed = true; this.emit('close', 0) }, unref() {} })
     process.nextTick(() => stdout.write('ready\n'))
+    stdin.on('data', chunk => {
+      if (chunk.toString('utf8').includes('{')) stdout.write('ok\n')
+    })
     return child
   })
   const pending = notifier.notify({ onReply() {} })
-  for (let i = 0; i < 50 && !fake.invocation; i++) await new Promise(resolve => setImmediate(resolve))
-  assert.ok(fake.invocation)
-  assert.equal(Buffer.concat(chunks).toString(), 'reply-keys\n')
-  fake.finish(null, '', '')
+  while (!Buffer.concat(chunks).toString().includes('{')) await new Promise(resolve => setImmediate(resolve))
+  assert.match(Buffer.concat(chunks).toString(), /^reply-keys\n\{/)
   await pending
   notifier.dispose()
-  assert.equal(Buffer.concat(chunks).toString(), 'reply-keys\nreply-keys-off\n')
+  assert.match(Buffer.concat(chunks).toString(), /reply-keys-off\n$/)
 })
 
 test('Windows renders distinct native approval actions without a text input', { skip: process.platform !== 'win32' }, () => {
@@ -258,21 +268,16 @@ test('local reply routes isolate sessions, reject empty text and acknowledge dup
 })
 
 test('successive toasts rotate identities so a new banner can stack above the previous one', async () => {
-  const payloads = [], timeouts = []
-  const notifier = createWindowsToast(config, (_exe, _args, options, callback) => {
-    timeouts.push(options.timeout)
-    const stdin = new PassThrough()
-    stdin.on('data', chunk => payloads.push(JSON.parse(chunk.toString('utf8'))))
-    queueMicrotask(() => callback(null, '', ''))
-    return { stdin, kill() {} }
-  })
+  const fake = fakeHost()
+  const notifier = createWindowsToast(config, fake.launch)
   for (const [index, message] of ['one', 'two', 'three', 'four', 'five', 'six'].entries()) {
     await notifier.notify({ message, sound: index === 0 ? 'C:\\sounds\\ding.wav' : undefined })
   }
-  assert.deepEqual(payloads.map(item => item.appId), [
+  assert.equal(fake.launches, 1)
+  assert.deepEqual(fake.payloads.map(item => item.appId), [
     'KeS1Ke.DSH', 'KeS1Ke.DSH.2', 'KeS1Ke.DSH.3', 'KeS1Ke.DSH.4', 'KeS1Ke.DSH.5', 'KeS1Ke.DSH',
   ])
-  assert.equal(payloads[0].sound, 'C:\\sounds\\ding.wav')
-  assert.equal(payloads[1].sound, undefined)
-  assert.deepEqual(timeouts, [22_000, 15_000, 15_000, 15_000, 15_000, 15_000])
+  assert.equal(fake.payloads[0].sound, 'C:\\sounds\\ding.wav')
+  assert.equal(fake.payloads[1].sound, undefined)
+  notifier.dispose()
 })

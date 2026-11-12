@@ -1,75 +1,106 @@
-import { execFile, spawn } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { win32 } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createToastReplies } from './reply.js'
 
 const scriptPath = fileURLToPath(new URL('./toast.ps1', import.meta.url))
-const activatorPath = fileURLToPath(new URL('./activate.ps1', import.meta.url))
 const powershell = win32.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
 // Windows shows one banner per notification identity. The next identity stacks a new banner above the previous one.
 const stackIds = ['KeS1Ke.DSH', 'KeS1Ke.DSH.2', 'KeS1Ke.DSH.3', 'KeS1Ke.DSH.4', 'KeS1Ke.DSH.5']
 
-export function createWindowsToast(config, launch = execFile, launchActivator = spawn) {
+export function createWindowsToast(config, launchHost = spawn) {
   const lifetime = new AbortController()
   const replies = createToastReplies()
-  let activator, stackIndex = 0
+  let stackIndex = 0, host, chain = Promise.resolve()
 
-  // The shell sends a toast reply with Ctrl+Enter and inserts a newline on Enter.
-  function setReplyKeys(on) {
-    const stdin = activator && activator.child && activator.child.stdin
-    if (!stdin || !stdin.writable) return
-    stdin.write(on ? 'reply-keys\n' : 'reply-keys-off\n')
+  function enqueue(task) {
+    const run = chain.then(task, task)
+    chain = run.then(() => {}, () => {})
+    return run
   }
 
-  function startActivator() {
-    if (activator) return activator.ready
+  // One Windows PowerShell process shows every later toast. Add-Type runs once inside it.
+  function startHost() {
+    if (host) return host.ready
     const env = { ...process.env }
     // Desktop Host runs Electron as Node. The activator must launch dsh://open in GUI mode.
     delete env.ELECTRON_RUN_AS_NODE
-    const child = launchActivator(powershell, [
-      '-NoLogo', '-NoProfile', '-NonInteractive', '-MTA', '-ExecutionPolicy', 'Bypass', '-File', activatorPath,
-    ], { env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
+    const child = launchHost(powershell, [
+      '-NoLogo', '-NoProfile', '-NonInteractive', '-MTA', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, '-HostMode',
+    ], { env, windowsHide: true })
+    let buffer = '', stderr = '', settled = false
+    const waiters = []
+    const failWaiters = error => { waiters.splice(0).forEach(waiter => waiter.reject(error)) }
     const ready = new Promise((resolve, reject) => {
-      let stdout = '', stderr = ''
       const timer = setTimeout(() => {
-        reject(new Error('Windows 通知回复服务启动超时'))
         child.kill()
+        reject(new Error('Windows 通知服务启动超时'))
       }, 15_000)
-      const onOutput = chunk => {
-        stdout += chunk
-        if (!stdout.includes('\n') && stdout.length < 64) return
-        child.stdout.removeListener('data', onOutput)
+      const finishReady = error => {
+        if (settled) return
+        settled = true
         clearTimeout(timer)
-        if (stdout.trim() !== 'ready') {
-          reject(new Error('Windows 通知回复服务返回了无效的启动响应'))
-          child.kill()
-          return
-        }
-        resolve()
-        child.stdout.unref()
-        child.stderr.unref()
-        child.stdin.unref()
-        child.unref()
+        if (error) reject(error)
+        else resolve()
       }
-      child.stdout.setEncoding('utf8').on('data', onOutput)
+      child.stdout.setEncoding('utf8').on('data', chunk => {
+        buffer += chunk
+        let index
+        while ((index = buffer.indexOf('\n')) >= 0) {
+          const line = buffer.slice(0, index).trim()
+          buffer = buffer.slice(index + 1)
+          if (!line) continue
+          if (!settled) {
+            finishReady(line === 'ready' ? null : new Error(line))
+            continue
+          }
+          const waiter = waiters.shift()
+          if (!waiter) continue
+          if (line === 'ok') waiter.resolve()
+          else waiter.reject(new Error(line.startsWith('error ') ? line.slice(6) : line))
+        }
+      })
       child.stderr.setEncoding('utf8').on('data', chunk => { stderr = (stderr + chunk).slice(-2048) })
       child.stdin.on('error', () => {})
-      child.once('error', error => { clearTimeout(timer); reject(error) })
+      child.once('error', error => { finishReady(error); failWaiters(error) })
       child.once('close', code => {
-        clearTimeout(timer)
-        activator = undefined
-        reject(new Error(stderr.trim() || `Windows 通知回复服务退出 (${code})`))
+        const error = new Error(stderr.trim() || `Windows 通知服务退出 (${code})`)
+        if (host && host.child === child) host = undefined
+        finishReady(error)
+        failWaiters(error)
       })
     })
-    activator = { child, ready }
+    host = { child, ready, waiters }
     return ready
+  }
+
+  function setReplyKeys(on) {
+    const stdin = host && host.child && host.child.stdin
+    if (!stdin || !stdin.writable) return
+    stdin.write(on ? 'reply-keys\n' : 'reply-keys-off\n', 'utf8')
+  }
+
+  function requestToast(payload) {
+    const current = host
+    return new Promise((resolve, reject) => {
+      let done = false
+      const settle = error => {
+        if (done) return
+        done = true
+        if (error) reject(error)
+        else resolve()
+      }
+      current.waiters.push({ resolve: () => settle(), reject: settle })
+      current.child.stdin.write(JSON.stringify(payload) + '\n', 'utf8', error => { if (error) settle(error) })
+    })
   }
 
   return {
     async notify({ title = config.title, message = config.message, signal, onReply, onDecision, onOpen, sound } = {}) {
       signal = signal ? AbortSignal.any([signal, lifetime.signal]) : lifetime.signal
       if (signal.aborted) return
-      if (onReply || onDecision || onOpen) await startActivator()
+      try { await startHost() }
+      catch (error) { if (signal.aborted) return; throw error }
       if (signal.aborted) return
       const payload = { title, message }
       const routes = []
@@ -109,26 +140,20 @@ export function createWindowsToast(config, launch = execFile, launchActivator = 
         payload.appId = stackIds[stackIndex]
         stackIndex = (stackIndex + 1) % stackIds.length
         if (typeof sound === 'string' && sound) payload.sound = sound
-        await new Promise((resolve, reject) => {
-          // Windows PowerShell's .NET Framework provides the WinRT projection used by toast.ps1.
-          const child = launch(powershell, [
-            '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath,
-          ], { windowsHide: true, timeout: payload.sound ? 22_000 : 15_000 }, (error, _stdout, stderr) => {
-            signal.removeEventListener('abort', abort)
-            if (signal.aborted) resolve()
-            else if (error) reject(new Error(stderr.trim() || error.message, { cause: error }))
-            else resolve()
-          })
-          const abort = () => child.kill()
-          signal.addEventListener('abort', abort, { once: true })
-          child.stdin.on('error', () => {})
-          child.stdin.end(JSON.stringify(payload) + '\n', 'utf8')
-        })
+        await enqueue(() => requestToast(payload))
         sent = !signal.aborted
       } finally {
         if (!sent) for (const route of routes) route.release()
       }
     },
-    dispose() { lifetime.abort(); replies.dispose(); activator?.child.stdin.end() },
+    dispose() {
+      lifetime.abort()
+      replies.dispose()
+      const child = host && host.child
+      host = undefined
+      if (!child) return
+      child.stdin.end()
+      child.kill()
+    },
   }
 }
