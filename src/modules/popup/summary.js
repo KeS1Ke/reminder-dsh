@@ -72,7 +72,9 @@ export async function summarizeCompletion(llm, config, { completedText, route, s
         if (chunk.type === 'finish') finish = chunk.reason
       }
       if (finish?.kind !== 'stop' || !output.trim()) throw new Error('AI 未返回完整任务总结')
-      return fitSummary(output, summaryChars)
+      const summary = fitSummary(output, summaryChars)
+      if (!summary) throw new Error('AI 未返回完整任务总结')
+      return summary
     }
     return await Promise.race([generate(), stopped])
   } catch (error) {

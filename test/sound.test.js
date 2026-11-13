@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -38,6 +38,12 @@ function mp3Clip(frames) {
 test('the built-in ding lasts about one second', () => {
   const ding = readFileSync(fileURLToPath(new URL('../assets/ding.wav', import.meta.url)))
   assert.ok(Math.abs(soundDurationSeconds('ding.wav', ding) - 1) < 0.05)
+})
+
+test('a wav header cannot claim more samples than the file contains', () => {
+  const clip = wavClip(1)
+  clip.writeUInt32LE(0x7fffffff, 40)
+  assert.throws(() => soundDurationSeconds('bad.wav', clip), /无法读取 wav/)
 })
 
 test('wav and mp3 clips over five seconds are rejected, and other formats are rejected', () => {
@@ -95,4 +101,40 @@ test('the sound route stores a short clip and rejects a clip longer than five se
   }))
   assert.equal(rejected.status, 400)
   assert.match((await rejected.json()).error, /5 秒/)
+})
+
+test('a sound that cannot be removed becomes an error response', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'reminder-sound-'))
+  const previous = process.env.LOCALAPPDATA
+  process.env.LOCALAPPDATA = dir
+  t.after(() => {
+    if (previous === undefined) delete process.env.LOCALAPPDATA
+    else process.env.LOCALAPPDATA = previous
+    rmSync(dir, { recursive: true, force: true })
+  })
+  mkdirSync(join(dir, 'KeS1Ke', 'reminder-dsh', 'notification-sound.wav'), { recursive: true })
+  const ctx = new Context()
+  t.after(() => ctx.fiber.dispose())
+  const routes = []
+  ctx.provide('llm', {})
+  ctx.provide('connection', { fetch: { register: route => { routes.push(route); return () => {} } } })
+  const popup = createPopupModule(ctx, Config({ showSummary: false }), { notify() {}, dispose() {} })
+  t.after(() => popup.dispose())
+  await new Promise(resolve => setImmediate(resolve))
+  const route = routes.find(item => item.path === '/api/reminder-dsh/sound')
+  const response = await route.fetch(new Request('http://localhost/api/reminder-dsh/sound', { method: 'DELETE' }))
+  assert.equal(response.status, 400)
+  assert.match((await response.json()).error, /.+/)
+})
+
+test('unloading the plugin removes the sound and session routes', async () => {
+  const ctx = new Context()
+  const removed = []
+  ctx.provide('llm', {})
+  ctx.provide('connection', { fetch: { register: route => () => { removed.push(route.path) } } })
+  const popup = createPopupModule(ctx, Config({ showSummary: false }), { notify() {}, dispose() {} })
+  await new Promise(resolve => setImmediate(resolve))
+  await ctx.fiber.dispose()
+  popup.dispose()
+  assert.deepEqual(removed.sort(), ['/api/reminder-dsh/session-open', '/api/reminder-dsh/sound'])
 })

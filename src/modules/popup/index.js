@@ -38,8 +38,13 @@ function attachSoundRoute(ctx, logger) {
           const headers = { 'cache-control': 'no-store' }
           if (request.method === 'GET') return Response.json({ custom: Boolean(customSoundPath()) }, { headers })
           if (request.method === 'DELETE') {
-            removeCustomSound()
-            return new Response(null, { status: 204, headers })
+            try {
+              removeCustomSound()
+              return new Response(null, { status: 204, headers })
+            } catch (error) {
+              const message = error instanceof Error ? error.message : '音效未删除'
+              return Response.json({ error: message }, { status: 400, headers })
+            }
           }
           try {
             const name = new URL(request.url).searchParams.get('name') ?? ''

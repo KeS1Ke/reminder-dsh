@@ -52,6 +52,18 @@ test('the three-line budget never exceeds a smaller configured character limit',
   assert.match(prompt, /必须在 3 行以内写完（不超过 40 个字）/)
 })
 
+test('an ellipsis-only summary falls back to an excerpt', async () => {
+  const errors = []
+  const llm = model([
+    { type: 'text-delta', text: '……' },
+    { type: 'finish', reason: { kind: 'stop' } },
+  ])
+  const text = await summarizeCompletion(llm, config, completion(), error => errors.push(error))
+  assert.match(text, /^AI 总结暂不可用。上一轮最终回复摘录：/)
+  assert.match(text, /已添加快速回复输入框/)
+  assert.equal(errors.length, 1)
+})
+
 test('a summary past the three-line budget ends on a complete sentence without an ellipsis', async () => {
   const llm = model([
     { type: 'text-delta', text: '已完成登录修复。后续仍需验证窗口置顶，这部分已经超出三行预算。' },

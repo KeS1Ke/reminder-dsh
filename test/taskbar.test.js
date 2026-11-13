@@ -99,6 +99,14 @@ test('taskbar disabled by default does not start a process', async () => {
   assert.equal(calls, 0)
 })
 
+test('badge startup keeps queued count updates', { skip: process.platform !== 'win32' }, () => {
+  const path = fileURLToPath(new URL('../src/modules/taskbar/badge.ps1', import.meta.url))
+  const result = spawnSync('pwsh.exe', ['-NoProfile', '-NonInteractive', '-File', path, '-DrainSelfTest'], {
+    encoding: 'utf8', timeout: 15000, windowsHide: true,
+  })
+  assert.equal(result.status, 0, result.error?.message ?? result.stderr)
+})
+
 test('taskbar Win32 badge helper compiles under pwsh on Windows', { skip: process.platform !== 'win32' }, () => {
   const path = fileURLToPath(new URL('../src/modules/taskbar/badge.ps1', import.meta.url))
   const result = spawnSync('pwsh.exe', ['-NoProfile', '-NonInteractive', '-File', path, '-ValidateOnly'], {
