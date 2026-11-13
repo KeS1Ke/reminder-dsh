@@ -114,15 +114,17 @@ export function createWindowsToast(config, launchHost = spawn) {
       waiter.resolve = () => finish()
       waiter.reject = error => finish(error)
       current.waiters.push(waiter)
-      try {
-        current.child.stdin.write(JSON.stringify(payload) + '\n', 'utf8', error => {
-          if (!error) return
-          finish(error, true)
-          try { current.child.kill() } catch {}
-        })
-      } catch (error) {
+      const failWrite = error => {
+        if (host === current) host = undefined
         finish(error, true)
         try { current.child.kill() } catch {}
+      }
+      try {
+        current.child.stdin.write(JSON.stringify(payload) + '\n', 'utf8', error => {
+          if (error) failWrite(error)
+        })
+      } catch (error) {
+        failWrite(error)
       }
     })
   }
@@ -167,7 +169,10 @@ export function createWindowsToast(config, launchHost = spawn) {
             payload.approval.push({ label, argument: `${route.argument}:decision` })
           }
         } else if (onReply) {
-          const reply = await replies.register(onReply)
+          const reply = await replies.register(text => {
+            disarm()
+            return onReply(text)
+          })
           if (!reply) return
           const release = reply.release
           reply.release = () => {
@@ -186,7 +191,8 @@ export function createWindowsToast(config, launchHost = spawn) {
           stackIndex = (stackIndex + 1) % stackIds.length
           if (typeof sound === 'string' && sound) payload.sound = sound
           if (onReply && writeLine(host, 'reply-keys\n')) armedHost = host
-          await requestToast(payload)
+          try { await requestToast(payload) }
+          catch (error) { if (signal.aborted) return; throw error }
           sent = true
         })
       } finally {

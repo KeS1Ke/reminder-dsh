@@ -214,11 +214,11 @@ namespace DshReminder
             return units;
         }
 
-        // Letters arm a possible IME commit. Space usually commits, so the following Enter can send.
+        // Letters arm a possible IME commit. Space or committed Unicode clears it so the following Enter can send.
         public static bool NoteCommit(bool armedCommit, uint vk, bool ctrl)
         {
             if (ctrl) return armedCommit;
-            if (vk == 0x20) return false;
+            if (vk == 0x20 || vk == 0xE7) return false;
             if (vk == 0x08 || vk == 0x2E) return armedCommit;
             if ((vk >= 0x30 && vk <= 0x39) || (vk >= 0x41 && vk <= 0x5A) || (vk >= 0x60 && vk <= 0x69) || vk == 0xE5)
                 return true;
@@ -256,8 +256,8 @@ namespace DshReminder
         // The keyboard hook exists only while a reply is armed and the notification UI is in front.
         static void InstallIfNeeded()
         {
-            if (Volatile.Read(ref armed) <= 0) { pendingUnits = 0; commitPending = false; }
             bool want = Volatile.Read(ref armed) > 0 && IsNotificationWindow(GetForegroundWindow());
+            if (!want) { pendingUnits = 0; commitPending = false; }
             if (want)
             {
                 if (hook == IntPtr.Zero) hook = SetWindowsHookEx(13, proc, IntPtr.Zero, 0);
@@ -301,8 +301,9 @@ namespace DshReminder
             catch { ready.Set(); }
             finally
             {
-                if (hook != IntPtr.Zero) UnhookWindowsHookEx(hook);
-                if (foregroundHook != IntPtr.Zero) UnhookWinEvent(foregroundHook);
+                if (hook != IntPtr.Zero) { UnhookWindowsHookEx(hook); hook = IntPtr.Zero; }
+                if (foregroundHook != IntPtr.Zero) { UnhookWinEvent(foregroundHook); foregroundHook = IntPtr.Zero; }
+                threadId = 0;
             }
         }
 
@@ -333,8 +334,12 @@ namespace DshReminder
             if (!notification) { pendingUnits = 0; commitPending = false; return false; }
             if (injected)
             {
-                // Our own Ctrl+Enter is injected. Other injected text, such as a paste, still fills the box.
-                if (key.vkCode != Enter) pendingUnits = NoteInput(pendingUnits, key.vkCode, ctrl);
+                // Our own Ctrl+Enter is injected. Other injected text, such as a paste or IME packet, still fills the box.
+                if (key.vkCode != Enter)
+                {
+                    pendingUnits = NoteInput(pendingUnits, key.vkCode, ctrl);
+                    commitPending = NoteCommit(commitPending, key.vkCode, ctrl);
+                }
                 return false;
             }
             if (key.vkCode != Enter)
@@ -378,7 +383,11 @@ namespace DshReminder
             if (cls.ToString() != "Windows.UI.Core.CoreWindow") return false;
             uint pid;
             GetWindowThreadProcessId(hwnd, out pid);
-            try { seenNotification = Process.GetProcessById((int)pid).ProcessName == "ShellExperienceHost"; }
+            try
+            {
+                using (var process = Process.GetProcessById((int)pid))
+                    seenNotification = process.ProcessName == "ShellExperienceHost";
+            }
             catch { seenNotification = false; }
             return seenNotification;
         }

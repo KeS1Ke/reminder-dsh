@@ -10,13 +10,15 @@ export function createTaskbarNotifier({ isEnabled, getWindowTitle }, launch = sp
   let active, disposed = false, count = 0
 
   function send(state, message) {
-    if (!state.child.stdin.destroyed) state.child.stdin.write(JSON.stringify(message) + '\n', 'utf8')
+    if (!state.child.stdin?.writable) return
+    try { state.child.stdin.write(JSON.stringify(message) + '\n', 'utf8') } catch {}
   }
   function stop(state = active) {
     if (!state || state.stopping) return
     state.stopping = true
     send(state, { type: 'stop' })
     state.killTimer = setTimeout(() => state.child.kill(), 2000)
+    state.killTimer.unref?.()
   }
   function start() {
     const child = launch('pwsh.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
@@ -41,6 +43,7 @@ export function createTaskbarNotifier({ isEnabled, getWindowTitle }, launch = sp
     child.on('close', code => finish(error ?? (code === 0 ? undefined : new Error(`任务栏角标失败：${stderr.trim() || code}`))))
     child.stdin.on('error', failure => { error = failure; child.kill() })
     state.timeout = setTimeout(() => { error = new Error('任务栏角标进程超时'); child.kill() }, (badgeMinutes + 1) * 60_000)
+    state.timeout.unref?.()
     send(state, { hostPid: process.pid, windowTitle: getWindowTitle(), count, maxMinutes: badgeMinutes })
     return state
   }

@@ -246,7 +246,7 @@ public static class DshTaskbarBadge {
         if (-not $shouldStop) {
             $targets = @([DshTaskbarBadge]::Find([string]$payload.windowTitle, $owners.ToArray()))
             # A window the user is already looking at needs no unread badge.
-            $targets = @($targets | Where-Object { $_ -ne [DshTaskbarBadge]::GetForegroundWindow() })
+            if ($targets -contains [DshTaskbarBadge]::GetForegroundWindow()) { $targets = @() }
             if ($targets.Count -gt 0) {
                 Show-Badge $targets $count
                 $until = [DateTime]::UtcNow.AddMinutes($minutes)
@@ -254,18 +254,9 @@ public static class DshTaskbarBadge {
                     if ($targets -contains [DshTaskbarBadge]::GetForegroundWindow()) { break }
                     $targets = @($targets | Where-Object { [DshTaskbarBadge]::IsWindow($_) })
                     if ($targets.Count -eq 0) { break }
-                    if ($control.IsCompleted) {
-                        $line = $control.GetAwaiter().GetResult()
-                        if ($null -eq $line) { break }
-                        $command = $line | ConvertFrom-Json
-                        if ($command.type -eq 'stop') { break }
-                        if ($command.type -eq 'set') {
-                            $count = [int]$command.count
-                            if ($count -lt 1 -or $count -gt 999) { throw 'Invalid badge count' }
-                            Show-Badge $targets $count
-                        }
-                        $control = $reader.ReadLineAsync()
-                    }
+                    $previousCount = $count
+                    if (Import-BadgeControl -Reader $reader -Control ([ref]$control) -Count ([ref]$count)) { break }
+                    if ($count -ne $previousCount) { Show-Badge $targets $count }
                     Start-Sleep -Milliseconds 150
                 }
             }

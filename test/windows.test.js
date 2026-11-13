@@ -205,28 +205,42 @@ test('Enter sends a toast reply and Shift+Enter keeps the newline', { skip: proc
   assert.deepEqual(lines, ['True', 'False', 'False', 'False', 'False'])
 })
 
-test('a reply toast arms Enter-to-send and releases it with the route', async () => {
-  const chunks = []
+test('a reply toast arms Enter-to-send, disarms when replied, and does not disarm twice on dispose', async () => {
+  const chunks = [], received = []
   const stdin = new PassThrough()
   const stdout = new PassThrough()
   const stderr = new PassThrough()
   for (const stream of [stdin, stdout, stderr]) stream.unref = () => {}
-  stdin.on('data', chunk => chunks.push(Buffer.from(chunk)))
+  let payload
+  stdin.on('data', chunk => {
+    chunks.push(Buffer.from(chunk))
+    const line = chunk.toString('utf8').split('\n').find(item => item.startsWith('{'))
+    if (line) {
+      payload = JSON.parse(line)
+      stdout.write('ok\n')
+    }
+  })
   const notifier = createWindowsToast(config, () => {
     const child = new EventEmitter()
     Object.assign(child, { stdin, stdout, stderr, kill() { this.killed = true; this.emit('close', 0) }, unref() {} })
     process.nextTick(() => stdout.write('ready\n'))
-    stdin.on('data', chunk => {
-      if (chunk.toString('utf8').includes('{')) stdout.write('ok\n')
-    })
     return child
   })
-  const pending = notifier.notify({ onReply() {} })
-  while (!Buffer.concat(chunks).toString().includes('{')) await new Promise(resolve => setImmediate(resolve))
+  await notifier.notify({ onReply: text => received.push(text) })
   assert.match(Buffer.concat(chunks).toString(), /^reply-keys\n\{/)
-  await pending
+  const [pipeId, token] = payload.reply.split(':')
+  const status = await new Promise((resolve, reject) => {
+    const socket = createConnection(`\\\\.\\pipe\\kesike-dsh-reply-${pipeId}`)
+    let acknowledgment = ''
+    socket.setEncoding('ascii').on('data', chunk => { acknowledgment += chunk })
+    socket.on('error', reject).on('end', () => resolve(acknowledgment.trim()))
+    socket.on('connect', () => socket.write(`${token} ${Buffer.from('继续').toString('base64')}\n`))
+  })
+  assert.equal(status, 'ok')
+  assert.deepEqual(received, ['继续'])
+  assert.equal((Buffer.concat(chunks).toString().match(/reply-keys-off\n/g) ?? []).length, 1)
   notifier.dispose()
-  assert.match(Buffer.concat(chunks).toString(), /reply-keys-off\n$/)
+  assert.equal((Buffer.concat(chunks).toString().match(/reply-keys-off\n/g) ?? []).length, 1)
 })
 
 test('Windows renders distinct native approval actions without a text input', { skip: process.platform !== 'win32' }, () => {
@@ -311,6 +325,29 @@ test('a toast cancelled while another toast is in flight is not shown', async ()
   notifier.dispose()
 })
 
+test('disposing while a toast write is awaiting host acknowledgment resolves cleanly', async () => {
+  let written = false
+  const stdin = new PassThrough()
+  const stdout = new PassThrough()
+  const stderr = new PassThrough()
+  const child = Object.assign(new EventEmitter(), {
+    stdin, stdout, stderr,
+    kill() { this.killed = true; this.emit('close', 0) },
+  })
+  stdin.on('data', chunk => {
+    if (chunk.toString('utf8').includes('{')) written = true
+  })
+  const notifier = createWindowsToast(config, () => {
+    process.nextTick(() => stdout.write('ready\n'))
+    return child
+  })
+  const pending = notifier.notify({ message: 'in-flight' })
+  while (!written) await new Promise(resolve => setImmediate(resolve))
+  notifier.dispose()
+  await pending
+  assert.equal(child.killed, true)
+})
+
 test('a toast host that exits before the banner is sent is started again', async () => {
   const payloads = []
   let launches = 0
@@ -384,44 +421,45 @@ test('a launch error does not stick the failed host', async () => {
   notifier.dispose()
 })
 
-test('a failed toast write does not consume the next toast result', async () => {
-  const payloads = []
-  const stdin = new PassThrough()
-  const stdout = new PassThrough()
-  const stderr = new PassThrough()
-  let failed = false
-  const original = stdin.write.bind(stdin)
-  stdin.write = (chunk, encoding, cb) => {
-    if (!failed && String(chunk).startsWith('{')) {
-      failed = true
-      cb(new Error('EPIPE'))
-      return true
-    }
-    return original(chunk, encoding, cb)
-  }
-  let buffer = ''
-  stdin.on('data', chunk => {
-    buffer += chunk.toString('utf8')
-    let index
-    while ((index = buffer.indexOf('\n')) >= 0) {
-      const line = buffer.slice(0, index)
-      buffer = buffer.slice(index + 1)
-      if (!line.startsWith('{')) continue
-      payloads.push(JSON.parse(line))
-      stdout.write('ok\n')
-    }
-  })
-  const child = Object.assign(new EventEmitter(), {
-    stdin, stdout, stderr,
-    kill() { this.killed = true },
-  })
+test('a failed toast write replaces the host and does not consume the next toast result', async () => {
+  const payloads = [], children = []
   const notifier = createWindowsToast(config, () => {
+    const stdin = new PassThrough()
+    const stdout = new PassThrough()
+    const stderr = new PassThrough()
+    const index = children.length
+    const original = stdin.write.bind(stdin)
+    stdin.write = (chunk, encoding, cb) => {
+      if (index === 0 && String(chunk).startsWith('{')) {
+        cb(new Error('EPIPE'))
+        return true
+      }
+      return original(chunk, encoding, cb)
+    }
+    let buffer = ''
+    stdin.on('data', chunk => {
+      buffer += chunk.toString('utf8')
+      let end
+      while ((end = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, end)
+        buffer = buffer.slice(end + 1)
+        if (!line.startsWith('{')) continue
+        payloads.push(JSON.parse(line))
+        stdout.write('ok\n')
+      }
+    })
+    const child = Object.assign(new EventEmitter(), {
+      stdin, stdout, stderr,
+      kill() { this.killed = true },
+    })
+    children.push(child)
     process.nextTick(() => stdout.write('ready\n'))
     return child
   })
   await assert.rejects(notifier.notify({ message: 'lost' }), /EPIPE/)
   await notifier.notify({ message: 'kept' })
-  assert.equal(child.killed, true)
+  assert.equal(children.length, 2)
+  assert.equal(children[0].killed, true)
   assert.deepEqual(payloads.map(item => item.message), ['kept'])
   notifier.dispose()
 })
@@ -471,11 +509,12 @@ test('reply text tracking counts typing and paste without treating deletion as n
     `Write-Output ([DshReminder.ReplyKeys]::PassEnterToIme($true, $false, $false)); ` +
     `Write-Output ([DshReminder.ReplyKeys]::PassEnterToIme($false, $false, $true)); ` +
     `Write-Output ([DshReminder.ReplyKeys]::NoteCommit($true, 0x20, $false)); ` +
+    `Write-Output ([DshReminder.ReplyKeys]::NoteCommit($true, 0xE7, $false)); ` +
     `Write-Output ([DshReminder.ReplyKeys]::NoteCommit($false, 0x41, $false))`],
   { encoding: 'utf8', timeout: 30_000, windowsHide: true })
   assert.equal(result.status, 0, result.error?.message ?? result.stderr)
   const lines = result.stdout.replace(/^\uFEFF/, '').trim().split(/\r?\n/)
-  assert.deepEqual(lines, ['0', '0', '1', 'True', 'False', 'True', 'False', 'True'])
+  assert.deepEqual(lines, ['0', '0', '1', 'True', 'False', 'True', 'False', 'False', 'True'])
 })
 
 test('successive toasts rotate identities so a new banner can stack above the previous one', async () => {
