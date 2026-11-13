@@ -28,14 +28,12 @@ function Import-BadgeControl {
 
 if ($DrainSelfTest) {
     function Assert-Drain([string]$label, [string]$inputText, [int]$expectedCount, [bool]$expectedStop) {
-        $server = [IO.Pipes.AnonymousPipeServerStream]::new([IO.Pipes.PipeDirection]::Out)
+        # The whole buffer is already readable, matching lines that arrived before the first paint.
+        # End of that buffer is a closed stdin, which stops the badge.
+        $bytes = [Text.Encoding]::UTF8.GetBytes($inputText)
+        $stream = [IO.MemoryStream]::new($bytes)
+        $reader = [IO.StreamReader]::new($stream, [Text.UTF8Encoding]::new($false))
         try {
-            $client = [IO.Pipes.AnonymousPipeClientStream]::new([IO.Pipes.PipeDirection]::In, $server.GetClientHandle())
-            $server.DisposeLocalCopyOfClientHandle()
-            $reader = [IO.StreamReader]::new($client, [Text.UTF8Encoding]::new($false))
-            $writer = [IO.StreamWriter]::new($server, [Text.UTF8Encoding]::new($false))
-            $writer.AutoFlush = $true
-            $writer.Write($inputText)
             $count = 1
             $control = $reader.ReadLineAsync()
             $deadline = [DateTime]::UtcNow.AddSeconds(2)
@@ -45,9 +43,9 @@ if ($DrainSelfTest) {
             if ($stop -ne $expectedStop -or $count -ne $expectedCount) {
                 throw "$label stop=$stop count=$count"
             }
-        } finally { try { $server.Dispose() } catch {} }
+        } finally { $reader.Dispose() }
     }
-    Assert-Drain 'queued sets' "{`"type`":`"set`",`"count`":2}`n{`"type`":`"set`",`"count`":4}`n" 4 $false
+    Assert-Drain 'queued sets' "{`"type`":`"set`",`"count`":2}`n{`"type`":`"set`",`"count`":4}`n" 4 $true
     Assert-Drain 'set then stop' "{`"type`":`"set`",`"count`":3}`n{`"type`":`"stop`"}`n" 3 $true
     Assert-Drain 'stop first' "{`"type`":`"stop`"}`n{`"type`":`"set`",`"count`":9}`n" 1 $true
     exit 0
