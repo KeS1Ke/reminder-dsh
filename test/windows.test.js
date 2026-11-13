@@ -267,6 +267,217 @@ test('local reply routes isolate sessions, reject empty text and acknowledge dup
   assert.equal(await send(second, '已经失效'), 'failed')
 })
 
+test('a toast cancelled while another toast is in flight is not shown', async () => {
+  let release
+  const gate = new Promise(resolve => { release = resolve })
+  const payloads = []
+  let written = ''
+  const stdin = new PassThrough()
+  const stdout = new PassThrough()
+  const stderr = new PassThrough()
+  const child = Object.assign(new EventEmitter(), {
+    stdin, stdout, stderr,
+    kill() { this.killed = true; this.emit('close', 0) },
+  })
+  let buffer = ''
+  stdin.on('data', chunk => {
+    written += chunk.toString('utf8')
+    buffer += chunk.toString('utf8')
+    let index
+    while ((index = buffer.indexOf('\n')) >= 0) {
+      const line = buffer.slice(0, index)
+      buffer = buffer.slice(index + 1)
+      if (!line.startsWith('{')) continue
+      payloads.push(JSON.parse(line))
+      if (payloads.length === 1) gate.then(() => stdout.write('ok\n'))
+      else stdout.write('ok\n')
+    }
+  })
+  const notifier = createWindowsToast(config, () => {
+    process.nextTick(() => stdout.write('ready\n'))
+    return child
+  })
+  const first = notifier.notify({ message: 'keep' })
+  while (payloads.length < 1) await new Promise(resolve => setImmediate(resolve))
+  const controller = new AbortController()
+  const second = notifier.notify({ message: 'drop', signal: controller.signal, onReply() {} })
+  for (let step = 0; step < 10; step++) await new Promise(resolve => setImmediate(resolve))
+  controller.abort()
+  release()
+  await first
+  await second
+  assert.deepEqual(payloads.map(item => item.message), ['keep'])
+  assert.equal(written.includes('reply-keys'), false)
+  notifier.dispose()
+})
+
+test('a toast host that exits before the banner is sent is started again', async () => {
+  const payloads = []
+  let launches = 0
+  const notifier = createWindowsToast(config, () => {
+    const generation = ++launches
+    const stdin = new PassThrough()
+    const stdout = new PassThrough()
+    const stderr = new PassThrough()
+    const child = Object.assign(new EventEmitter(), {
+      stdin, stdout, stderr,
+      kill() { this.killed = true; this.emit('close', 0) },
+    })
+    let buffer = ''
+    stdin.on('data', chunk => {
+      buffer += chunk.toString('utf8')
+      let index
+      while ((index = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, index)
+        buffer = buffer.slice(index + 1)
+        if (!line.startsWith('{')) continue
+        payloads.push(JSON.parse(line))
+        stdout.write('ok\n')
+      }
+    })
+    process.nextTick(() => {
+      stdout.write('ready\n')
+      if (generation === 1) child.emit('close', 0)
+    })
+    return child
+  })
+  await notifier.notify({ message: 'after-restart' })
+  assert.equal(launches, 2)
+  assert.deepEqual(payloads.map(item => item.message), ['after-restart'])
+  notifier.dispose()
+})
+
+test('a host that fails to start can be replaced', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  let launches = 0
+  const notifier = createWindowsToast(config, () => {
+    launches += 1
+    return Object.assign(new EventEmitter(), {
+      stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(),
+      kill() { this.killed = true },
+    })
+  })
+  const first = notifier.notify()
+  t.mock.timers.tick(15_000)
+  await assert.rejects(first, /启动超时/)
+  const second = notifier.notify()
+  t.mock.timers.tick(15_000)
+  await assert.rejects(second, /启动超时/)
+  assert.equal(launches, 2)
+  notifier.dispose()
+})
+
+test('a launch error does not stick the failed host', async () => {
+  let launches = 0
+  const notifier = createWindowsToast(config, () => {
+    launches += 1
+    const child = Object.assign(new EventEmitter(), {
+      stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(),
+      kill() { this.killed = true },
+    })
+    process.nextTick(() => child.emit('error', new Error(`down-${launches}`)))
+    return child
+  })
+  await assert.rejects(notifier.notify(), /down-1/)
+  await assert.rejects(notifier.notify(), /down-2/)
+  assert.equal(launches, 2)
+  notifier.dispose()
+})
+
+test('a failed toast write does not consume the next toast result', async () => {
+  const payloads = []
+  const stdin = new PassThrough()
+  const stdout = new PassThrough()
+  const stderr = new PassThrough()
+  let failed = false
+  const original = stdin.write.bind(stdin)
+  stdin.write = (chunk, encoding, cb) => {
+    if (!failed && String(chunk).startsWith('{')) {
+      failed = true
+      cb(new Error('EPIPE'))
+      return true
+    }
+    return original(chunk, encoding, cb)
+  }
+  let buffer = ''
+  stdin.on('data', chunk => {
+    buffer += chunk.toString('utf8')
+    let index
+    while ((index = buffer.indexOf('\n')) >= 0) {
+      const line = buffer.slice(0, index)
+      buffer = buffer.slice(index + 1)
+      if (!line.startsWith('{')) continue
+      payloads.push(JSON.parse(line))
+      stdout.write('ok\n')
+    }
+  })
+  const child = Object.assign(new EventEmitter(), {
+    stdin, stdout, stderr,
+    kill() { this.killed = true },
+  })
+  const notifier = createWindowsToast(config, () => {
+    process.nextTick(() => stdout.write('ready\n'))
+    return child
+  })
+  await assert.rejects(notifier.notify({ message: 'lost' }), /EPIPE/)
+  await notifier.notify({ message: 'kept' })
+  assert.equal(child.killed, true)
+  assert.deepEqual(payloads.map(item => item.message), ['kept'])
+  notifier.dispose()
+})
+
+test('releasing a reply route disarms the host that showed it', async () => {
+  const logs = []
+  const children = []
+  const notifier = createWindowsToast(config, () => {
+    const stdin = new PassThrough()
+    const stdout = new PassThrough()
+    const stderr = new PassThrough()
+    const child = Object.assign(new EventEmitter(), {
+      stdin, stdout, stderr,
+      kill() { this.killed = true; this.emit('close', 0) },
+    })
+    const index = children.length
+    logs[index] = ''
+    children.push(child)
+    stdin.on('data', chunk => {
+      logs[index] += chunk.toString('utf8')
+      if (chunk.toString('utf8').includes('{')) stdout.write('ok\n')
+    })
+    process.nextTick(() => stdout.write('ready\n'))
+    return child
+  })
+  await notifier.notify({ onReply() {} })
+  assert.match(logs[0], /^reply-keys\n\{/)
+  children[0].emit('close', 0)
+  await notifier.notify({ message: 'plain' })
+  assert.equal(children.length, 2)
+  assert.equal(logs[1].includes('reply-keys'), false)
+  notifier.dispose()
+  assert.match(logs[0], /reply-keys-off\n/)
+  assert.equal(logs[1].includes('reply-keys-off'), false)
+})
+
+test('reply text tracking counts typing and paste without treating deletion as new text', { skip: process.platform !== 'win32' }, () => {
+  const path = fileURLToPath(new URL('../src/modules/popup/ToastActivator.cs', import.meta.url))
+  const result = spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
+    `Add-Type -Path '${path.replace(/'/g, "''")}'; ` +
+    `$u = [DshReminder.ReplyKeys]::NoteInput(0, 0x41, $false); ` +
+    `$u = [DshReminder.ReplyKeys]::NoteInput($u, 0x08, $false); ` +
+    `Write-Output $u; ` +
+    `Write-Output ([DshReminder.ReplyKeys]::NoteInput(0, 0x08, $false)); ` +
+    `Write-Output ([DshReminder.ReplyKeys]::NoteInput(0, 0x56, $true)); ` +
+    `Write-Output ([DshReminder.ReplyKeys]::PassEnterToIme($true, $true, $false)); ` +
+    `Write-Output ([DshReminder.ReplyKeys]::PassEnterToIme($true, $false, $false)); ` +
+    `Write-Output ([DshReminder.ReplyKeys]::PassEnterToIme($false, $false, $true)); ` +
+    `Write-Output ([DshReminder.ReplyKeys]::NoteCommit($true, 0x20, $false)); ` +
+    `Write-Output ([DshReminder.ReplyKeys]::NoteCommit($false, 0x41, $false))`],
+  { encoding: 'utf8', timeout: 30_000, windowsHide: true })
+  assert.equal(result.status, 0, result.error?.message ?? result.stderr)
+  const lines = result.stdout.replace(/^\uFEFF/, '').trim().split(/\r?\n/)
+  assert.deepEqual(lines, ['0', '0', '1', 'True', 'False', 'True', 'False', 'True'])
+})
+
 test('successive toasts rotate identities so a new banner can stack above the previous one', async () => {
   const fake = fakeHost()
   const notifier = createWindowsToast(config, fake.launch)

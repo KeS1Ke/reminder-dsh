@@ -142,30 +142,23 @@ using System.Text;
 public static class DshSound {
   [DllImport("winmm.dll", CharSet = CharSet.Unicode, EntryPoint = "mciSendStringW")]
   public static extern int Send(string command, StringBuilder buffer, int bufferSize, IntPtr callback);
-  public static void CloseLater(string alias) {
-    var captured = alias;
-    System.Threading.ThreadPool.QueueUserWorkItem(delegate {
-      System.Threading.Thread.Sleep(6000);
-      Send("close " + captured, null, 0, System.IntPtr.Zero);
-    });
+  // MCI device aliases belong to the thread that opened them, so play and close stay together.
+  public static void Play(string openCommand, string alias) {
+    if (Send(openCommand, null, 0, System.IntPtr.Zero) != 0) return;
+    try { Send("play " + alias + " wait", null, 0, System.IntPtr.Zero); }
+    finally { Send("close " + alias, null, 0, System.IntPtr.Zero); }
+  }
+  public static void PlayLater(string openCommand, string alias) {
+    System.Threading.ThreadPool.QueueUserWorkItem(delegate { Play(openCommand, alias); });
   }
 }
 '@
     }
     $alias = 'dsh' + [guid]::NewGuid().ToString('N')
     $type = if ($path -like '*.mp3') { 'mpegvideo' } else { 'waveaudio' }
-    $opened = [DshSound]::Send('open "' + $path + '" type ' + $type + ' alias ' + $alias, $null, 0, [IntPtr]::Zero)
-    if ($opened -ne 0) { return }
-    if ($async) {
-      if ([DshSound]::Send('play ' + $alias, $null, 0, [IntPtr]::Zero) -ne 0) {
-        [void][DshSound]::Send('close ' + $alias, $null, 0, [IntPtr]::Zero)
-        return
-      }
-      [DshSound]::CloseLater($alias)
-      return
-    }
-    try { [void][DshSound]::Send('play ' + $alias + ' wait', $null, 0, [IntPtr]::Zero) }
-    finally { [void][DshSound]::Send('close ' + $alias, $null, 0, [IntPtr]::Zero) }
+    $open = 'open "' + $path + '" type ' + $type + ' alias ' + $alias
+    if ($async) { [DshSound]::PlayLater($open, $alias); return }
+    [DshSound]::Play($open, $alias)
   } catch {}
 }
 

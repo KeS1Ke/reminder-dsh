@@ -187,7 +187,8 @@ namespace DshReminder
         const uint Reevaluate = 0x8002;
 
         static int armed;
-        static bool pending;
+        static int pendingUnits;
+        static bool commitPending;
         static uint threadId;
         static IntPtr hook;
         static IntPtr foregroundHook;
@@ -201,6 +202,33 @@ namespace DshReminder
         public static bool ShouldSend(bool shift, bool ctrl, bool alt, bool hasText)
         {
             return hasText && !shift && !ctrl && !alt;
+        }
+
+        // Backspace undoes one typed unit and never invents text. Paste and injected characters count as one unit.
+        public static int NoteInput(int units, uint vk, bool ctrl)
+        {
+            if (ctrl && vk == 0x56) return units + 1;
+            if (ctrl) return units;
+            if (vk == 0x08 || vk == 0x2E) return units > 0 ? units - 1 : 0;
+            if (IsTextKey(vk, false)) return units + 1;
+            return units;
+        }
+
+        // Letters arm a possible IME commit. Space usually commits, so the following Enter can send.
+        public static bool NoteCommit(bool armedCommit, uint vk, bool ctrl)
+        {
+            if (ctrl) return armedCommit;
+            if (vk == 0x20) return false;
+            if (vk == 0x08 || vk == 0x2E) return armedCommit;
+            if ((vk >= 0x30 && vk <= 0x39) || (vk >= 0x41 && vk <= 0x5A) || (vk >= 0x60 && vk <= 0x69) || vk == 0xE5)
+                return true;
+            return armedCommit;
+        }
+
+        // The first Enter while an IME is composing or in native mode belongs to the IME, not to Send.
+        public static bool PassEnterToIme(bool armedCommit, bool nativeIme, bool composing)
+        {
+            return composing || (armedCommit && nativeIme);
         }
 
         public static void Arm() { Interlocked.Increment(ref armed); Nudge(); }
@@ -228,7 +256,7 @@ namespace DshReminder
         // The keyboard hook exists only while a reply is armed and the notification UI is in front.
         static void InstallIfNeeded()
         {
-            if (Volatile.Read(ref armed) <= 0) pending = false;
+            if (Volatile.Read(ref armed) <= 0) { pendingUnits = 0; commitPending = false; }
             bool want = Volatile.Read(ref armed) > 0 && IsNotificationWindow(GetForegroundWindow());
             if (want)
             {
@@ -297,20 +325,33 @@ namespace DshReminder
             int message = wParam.ToInt32();
             if (message != KeyDown) return false;
             Kbd key = (Kbd)Marshal.PtrToStructure(lParam, typeof(Kbd));
-            if ((key.flags & Injected) != 0) return false;
-            if (Volatile.Read(ref armed) <= 0) { pending = false; return false; }
+            bool injected = (key.flags & Injected) != 0;
+            if (Volatile.Read(ref armed) <= 0) { pendingUnits = 0; commitPending = false; return false; }
             IntPtr foreground = GetForegroundWindow();
             bool notification = IsNotificationWindow(foreground);
             bool ctrl = Down(Ctrl), alt = Down(Alt), shift = Down(Shift);
-            if (!notification) { pending = false; return false; }
-            if (key.vkCode != Enter)
+            if (!notification) { pendingUnits = 0; commitPending = false; return false; }
+            if (injected)
             {
-                if (IsTextKey(key.vkCode, ctrl)) pending = true;
+                // Our own Ctrl+Enter is injected. Other injected text, such as a paste, still fills the box.
+                if (key.vkCode != Enter) pendingUnits = NoteInput(pendingUnits, key.vkCode, ctrl);
                 return false;
             }
-            if (!ShouldSend(shift, ctrl, alt, pending)) return false;
-            if (Composing(foreground)) return false;
-            pending = false;
+            if (key.vkCode != Enter)
+            {
+                pendingUnits = NoteInput(pendingUnits, key.vkCode, ctrl);
+                commitPending = NoteCommit(commitPending, key.vkCode, ctrl);
+                return false;
+            }
+            if (!ShouldSend(shift, ctrl, alt, pendingUnits > 0)) return false;
+            bool composing = Composing(foreground);
+            if (PassEnterToIme(commitPending, !composing && commitPending && NativeIme(foreground), composing))
+            {
+                commitPending = false;
+                return false;
+            }
+            pendingUnits = 0;
+            commitPending = false;
             return true;
         }
 
@@ -320,7 +361,7 @@ namespace DshReminder
             if (vk >= 0x30 && vk <= 0x39) return true;
             if (vk >= 0x41 && vk <= 0x5A) return true;
             if (vk >= 0x60 && vk <= 0x6F) return true;
-            if (vk == 0x08 || vk == 0x20 || vk == 0x2E) return true;
+            if (vk == 0x20) return true;
             if (vk >= 0xBA && vk <= 0xC0) return true;
             if (vk >= 0xDB && vk <= 0xDE) return true;
             return vk == 0xE7;
@@ -344,10 +385,28 @@ namespace DshReminder
 
         static bool Composing(IntPtr hwnd)
         {
+            if (ContextComposing(hwnd)) return true;
+            // ImmGetContext on another process's CoreWindow is usually empty. The IME window is the fallback.
+            IntPtr ime = ImmGetDefaultIMEWnd(hwnd);
+            return ime != IntPtr.Zero && ime != hwnd && ContextComposing(ime);
+        }
+
+        static bool ContextComposing(IntPtr hwnd)
+        {
             IntPtr context = ImmGetContext(hwnd);
             if (context == IntPtr.Zero) return false;
             try { return ImmGetCompositionString(context, 0x0008, IntPtr.Zero, 0) > 0; }
             finally { ImmReleaseContext(hwnd, context); }
+        }
+
+        static bool NativeIme(IntPtr hwnd)
+        {
+            IntPtr ime = ImmGetDefaultIMEWnd(hwnd);
+            if (ime == IntPtr.Zero) return false;
+            IntPtr mode;
+            // A short timeout: the keyboard hook must not wait on a busy IME window.
+            IntPtr ok = SendMessageTimeout(ime, 0x0283, (IntPtr)0x0001, IntPtr.Zero, 0x0002, 15, out mode);
+            return ok != IntPtr.Zero && (mode.ToInt64() & 1) != 0;
         }
 
         static bool Down(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
@@ -396,5 +455,7 @@ namespace DshReminder
         [DllImport("imm32.dll")] static extern IntPtr ImmGetContext(IntPtr hwnd);
         [DllImport("imm32.dll")] static extern bool ImmReleaseContext(IntPtr hwnd, IntPtr context);
         [DllImport("imm32.dll")] static extern int ImmGetCompositionString(IntPtr context, uint index, IntPtr buffer, uint length);
+        [DllImport("imm32.dll")] static extern IntPtr ImmGetDefaultIMEWnd(IntPtr hwnd);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr SendMessageTimeout(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam, uint flags, uint timeout, out IntPtr result);
     }
 }

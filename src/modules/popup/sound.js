@@ -16,12 +16,22 @@ export function customSoundPath(dir = soundDirectory()) {
 }
 
 export function removeCustomSound(dir = soundDirectory()) {
-  for (const name of fileNames) rmSync(join(dir, name), { force: true })
+  for (const name of fileNames) {
+    try { rmSync(join(dir, name), { force: true }) }
+    catch (error) { rethrowBusy(error) }
+  }
 }
 
 function extension(name) {
   const match = /\.([a-z0-9]+)$/i.exec(String(name ?? ''))
   return match ? match[1].toLowerCase() : ''
+}
+
+function rethrowBusy(error) {
+  if (error?.code === 'EBUSY' || error?.code === 'EPERM' || error?.code === 'EACCES') {
+    throw new Error('音效文件正在使用，请稍后再试')
+  }
+  throw error
 }
 
 function wavSeconds(bytes) {
@@ -34,7 +44,11 @@ function wavSeconds(bytes) {
     const size = bytes.readUInt32LE(offset + 4)
     const start = offset + 8
     if (id === 'fmt ' && size >= 16 && start + 16 <= bytes.length) byteRate = bytes.readUInt32LE(start + 8)
-    else if (id === 'data') { dataSize = size; break }
+    else if (id === 'data') {
+      if (size > bytes.length - start) throw new Error('无法读取 wav 音效')
+      dataSize = size
+      break
+    }
     offset = start + size + (size % 2)
     if (offset < start) break
   }
@@ -98,10 +112,13 @@ export function saveCustomSound(name, bytes, dir = soundDirectory()) {
   const temporary = `${target}.tmp`
   writeFileSync(temporary, body)
   try { copyFileSync(temporary, target) }
+  catch (error) { rethrowBusy(error) }
   finally { rmSync(temporary, { force: true }) }
   for (const fileName of fileNames) {
     const file = join(dir, fileName)
-    if (file !== target) rmSync(file, { force: true })
+    if (file === target) continue
+    try { rmSync(file, { force: true }) }
+    catch (error) { rethrowBusy(error) }
   }
   return target
 }

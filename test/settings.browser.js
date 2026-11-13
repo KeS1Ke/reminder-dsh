@@ -202,7 +202,12 @@ try {
   assert.deepEqual(await writes().then(list => list.at(-1)), [{ op: 'set', path: ['popup', 'soundEnabled'], value: false }])
 
   await page.getByLabel('目标窗口标题包含（可选）').fill('测试会话 — DeepSeek Harness')
-  await page.getByRole('button', { name: '保存目标窗口' }).click()
+  const saveTitle = page.getByRole('button', { name: '保存目标窗口' })
+  assert.deepEqual(await saveTitle.evaluate(element => {
+    const style = getComputedStyle(element)
+    return { background: style.backgroundColor, radius: style.borderTopLeftRadius, border: style.borderTopWidth }
+  }), { background: 'rgba(0, 0, 0, 0)', radius: '6px', border: '1px' })
+  await saveTitle.click()
   await taskbarStatus.filter({ hasText: '已保存，立即生效。' }).waitFor()
   assert.deepEqual(await writes().then(list => list.at(-1)), [{ op: 'set', path: ['taskbar', 'windowTitle'], value: '测试会话 — DeepSeek Harness' }])
 

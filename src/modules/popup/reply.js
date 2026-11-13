@@ -47,11 +47,18 @@ export function createToastReplies() {
     }
     socket.on('data', receive)
   })
+  // Keep one listener after startup so a later pipe error cannot crash the process.
+  server.on('error', () => {})
 
   function listen() {
     listening ??= new Promise((resolve, reject) => {
-      server.once('error', reject)
+      const fail = error => {
+        server.removeListener('error', fail)
+        reject(error)
+      }
+      server.once('error', fail)
       server.listen(`\\\\.\\pipe\\kesike-dsh-reply-${pipeId}`, () => {
+        server.removeListener('error', fail)
         server.unref()
         resolve()
       })

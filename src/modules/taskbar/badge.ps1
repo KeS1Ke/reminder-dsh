@@ -1,8 +1,55 @@
 #requires -Version 7.0
 #requires -PSEdition Core
-param([switch]$ValidateOnly)
+param([switch]$ValidateOnly, [switch]$DrainSelfTest)
 
 $ErrorActionPreference = 'Stop'
+
+# Lines that arrived while the parent-process walk was running must update the count before the first paint.
+function Import-BadgeControl {
+    param(
+        [IO.StreamReader]$Reader,
+        [ref]$Control,
+        [ref]$Count
+    )
+    while ($Control.Value.IsCompleted) {
+        $line = $Control.Value.GetAwaiter().GetResult()
+        if ($null -eq $line) { return $true }
+        $command = $line | ConvertFrom-Json
+        if ($command.type -eq 'stop') { return $true }
+        if ($command.type -eq 'set') {
+            $next = [int]$command.count
+            if ($next -lt 1 -or $next -gt 999) { throw 'Invalid badge count' }
+            $Count.Value = $next
+        }
+        $Control.Value = $Reader.ReadLineAsync()
+    }
+    return $false
+}
+
+if ($DrainSelfTest) {
+    function Assert-Drain([string]$label, [string]$inputText, [int]$expectedCount, [bool]$expectedStop) {
+        # The whole buffer is already readable, matching lines that arrived before the first paint.
+        # End of that buffer is a closed stdin, which stops the badge.
+        $bytes = [Text.Encoding]::UTF8.GetBytes($inputText)
+        $stream = [IO.MemoryStream]::new($bytes)
+        $reader = [IO.StreamReader]::new($stream, [Text.UTF8Encoding]::new($false))
+        try {
+            $count = 1
+            $control = $reader.ReadLineAsync()
+            $deadline = [DateTime]::UtcNow.AddSeconds(2)
+            while (-not $control.IsCompleted -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 10 }
+            if (-not $control.IsCompleted) { throw "$label did not buffer the first line" }
+            $stop = Import-BadgeControl -Reader $reader -Control ([ref]$control) -Count ([ref]$count)
+            if ($stop -ne $expectedStop -or $count -ne $expectedCount) {
+                throw "$label stop=$stop count=$count"
+            }
+        } finally { $reader.Dispose() }
+    }
+    Assert-Drain 'queued sets' "{`"type`":`"set`",`"count`":2}`n{`"type`":`"set`",`"count`":4}`n" 4 $true
+    Assert-Drain 'set then stop' "{`"type`":`"set`",`"count`":3}`n{`"type`":`"stop`"}`n" 3 $true
+    Assert-Drain 'stop first' "{`"type`":`"stop`"}`n{`"type`":`"set`",`"count`":9}`n" 1 $true
+    exit 0
+}
 $targets = @()
 $badgeIcon = [IntPtr]::Zero
 $exitCode = 0
@@ -126,8 +173,9 @@ public static class DshTaskbarBadge {
             $height = 30
             $fontSize = switch ($text.Length) { 1 { 27 } 2 { 21 } default { 15 } }
             $bitmap = [System.Drawing.Bitmap]::new($size, $size)
-            $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
             try {
+                $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+                try {
                 $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
                 $graphics.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::AntiAliasGridFit
                 $graphics.Clear([System.Drawing.Color]::Transparent)
@@ -158,14 +206,20 @@ public static class DshTaskbarBadge {
                     try { $graphics.DrawString($text, $font, [System.Drawing.Brushes]::White, [System.Drawing.RectangleF]::new(-4, 0, $size + 8, $size), $format) } finally { $format.Dispose() }
                 } finally { $font.Dispose() }
             } finally { $graphics.Dispose() }
-            return $bitmap.GetHicon()
+                return $bitmap.GetHicon()
+            } finally { $bitmap.Dispose() }
         }
 
         function Show-Badge([IntPtr[]]$windows, [int]$value) {
             $icon = New-BadgeIcon $value
             $text = if ($value -gt 99) { '99+' } else { [string]$value }
-            foreach ($window in $windows) {
-                [DshTaskbarBadge]::SetOverlay($window, $icon, "$text 个会话已完成")
+            try {
+                foreach ($window in $windows) {
+                    [DshTaskbarBadge]::SetOverlay($window, $icon, "$text 个会话已完成")
+                }
+            } catch {
+                $null = [DshTaskbarBadge]::DestroyIcon($icon)
+                throw
             }
             # Replace the previous handle only after every window points at the new icon.
             if ($script:badgeIcon -ne [IntPtr]::Zero) { $null = [DshTaskbarBadge]::DestroyIcon($script:badgeIcon) }
@@ -188,12 +242,7 @@ public static class DshTaskbarBadge {
             if ($null -eq $processInfo) { break }
             $processId = [int]$processInfo.ParentProcessId
         }
-        $shouldStop = $false
-        if ($control.IsCompleted) {
-            $line = $control.GetAwaiter().GetResult()
-            if ($null -eq $line -or ($line | ConvertFrom-Json).type -eq 'stop') { $shouldStop = $true }
-            else { $control = $reader.ReadLineAsync() }
-        }
+        $shouldStop = Import-BadgeControl -Reader $reader -Control ([ref]$control) -Count ([ref]$count)
         if (-not $shouldStop) {
             $targets = @([DshTaskbarBadge]::Find([string]$payload.windowTitle, $owners.ToArray()))
             # A window the user is already looking at needs no unread badge.
