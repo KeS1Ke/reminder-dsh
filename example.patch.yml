@@ -1,5 +1,10 @@
 - id: dsh-reminder
   config:
+    esp32:
+      enabled: false
+      address: ''
+      token: '' # Filled by Settings → Notifications → Pair and enable. Do not share.
+      soundEnabled: true
     taskbar:
       enabled: false
       windowTitle: ''

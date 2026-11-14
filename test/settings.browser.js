@@ -32,6 +32,7 @@ try {
     window.polls = []
     window.soundPosts = []
     window.soundDeletes = 0
+    window.esp32Requests = []
     let focused = false
     document.hasFocus = () => focused
     window.setDshFocus = value => {
@@ -41,6 +42,11 @@ try {
     window.fetch = (url, options = {}) => {
       const href = String(url)
       window.fetchUrls.push(href)
+      if (href.includes('api/reminder-dsh/esp32')) {
+        const body = JSON.parse(options.body)
+        window.esp32Requests.push(body)
+        return Promise.resolve(Response.json(body.action === 'pair' ? { token: '0123456789abcdef0123456789abcdef' } : { accepted: true }))
+      }
       if (href.includes('api/reminder-dsh/sound')) {
         const method = options.method ?? 'GET'
         if (method === 'POST') {
@@ -65,7 +71,7 @@ try {
       },
     }
     window.publish = value => {
-      snapshot = { ...snapshot, value: { popup: { ...snapshot.value.popup, ...value.popup }, taskbar: { ...snapshot.value.taskbar, ...value.taskbar } } }
+      snapshot = { ...snapshot, value: { popup: { ...snapshot.value.popup, ...value.popup }, taskbar: { ...snapshot.value.taskbar, ...value.taskbar }, esp32: { ...snapshot.value.esp32, ...value.esp32 } } }
       for (const listener of listeners) listener()
     }
     const form = {
@@ -250,6 +256,33 @@ try {
     'http://test.local/dsh/api/reminder-dsh/session-open?ack=gone-session-click',
     'http://test.local/dsh/api/reminder-dsh/session-open?ack=current-click',
   ])
+  assert.deepEqual(errors, [])
+  const device = page.locator('[data-reminder-module="esp32"]')
+  const deviceToggle = device.getByRole('switch', { name: 'ESP32 Wi-Fi 完成提醒' })
+  assert.equal(await deviceToggle.isChecked(), false)
+  await device.getByLabel('ESP32 地址').fill('http://192.168.137.22:8080')
+  await device.getByLabel('六位配对码').fill('123456')
+  await page.evaluate(() => { window.failNext = true })
+  await device.getByRole('button', { name: '配对并启用' }).click()
+  await device.getByRole('alert').filter({ hasText: '配对成功，但设置未保存' }).waitFor()
+  await device.getByRole('button', { name: '配对并启用' }).click()
+  await device.getByRole('status').filter({ hasText: '已配对并保存' }).waitFor()
+  assert.equal(await deviceToggle.isChecked(), true)
+  assert.equal(await device.getByLabel('六位配对码').inputValue(), '')
+  assert.equal(await page.evaluate(() => window.esp32Requests.length), 1)
+  assert.deepEqual(await writes().then(list => list.at(-1)), [
+    { op: 'set', path: ['esp32', 'address'], value: 'http://192.168.137.22:8080' },
+    { op: 'set', path: ['esp32', 'token'], value: '0123456789abcdef0123456789abcdef' },
+    { op: 'set', path: ['esp32', 'enabled'], value: true },
+  ])
+  await device.getByRole('button', { name: '发送测试提醒' }).click()
+  await device.getByRole('status').filter({ hasText: '设备已接收测试提醒' }).waitFor()
+  await device.getByRole('switch', { name: 'ESP32 提示音' }).click()
+  await saveSwitches.click()
+  assert.deepEqual(await writes().then(list => list.at(-1)), [{ op: 'set', path: ['esp32', 'soundEnabled'], value: false }])
+  // A mobile-width settings panel must keep pairing inputs within the viewport.
+  await page.setViewportSize({ width: 360, height: 740 })
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true)
   assert.deepEqual(errors, [])
   console.log('Settings browser checks passed: bell icon, staged switch save/cancel, atomic write, per-field feedback, refused write, external live update, toast session jump.')
 } finally { await browser.close() }

@@ -5,8 +5,41 @@ import Loader from '@deepseek-ai/cordis-plugin-loader'
 import { Config, startReminderRuntime } from '../src/index.js'
 import { createPopupModule } from '../src/modules/popup/index.js'
 import { createTaskbarModule } from '../src/modules/taskbar/index.js'
+import { createEsp32Module } from '../src/modules/esp32/index.js'
 
 const flush = () => new Promise(resolve => setImmediate(resolve))
+
+test('ESP32 settings update live, cancel old credentials and retain the module on disable', async t => {
+  const ctx = new Context()
+  t.after(() => ctx.fiber.dispose())
+  await ctx.plugin(Loader)
+  const signals = [], destinations = []
+  let module, mounts = 0
+  ctx.loader.builtins.device = { Config, apply(owner, config) {
+    mounts++
+    module = createEsp32Module(owner, config.esp32, async (url, options) => {
+      destinations.push(url); signals.push(options.signal)
+      if (signals.length === 1) await new Promise((resolve, reject) => options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true }))
+      return Response.json({ accepted: true })
+    })
+    owner.on('loader/volatile-update', module.update)
+    owner.effect(() => module.dispose)
+  } }
+  const id = await ctx.loader.create({ name: 'cordis:device', config: { esp32: { enabled: true,
+    address: 'http://192.168.1.20:8080', token: '0123456789abcdef0123456789abcdef' } } })
+  const entry = ctx.loader.resolve(id)
+  await entry.fiber.await()
+  const first = module.notify({})
+  await entry.update({ config: { esp32: { enabled: true, address: 'http://192.168.1.21:8080', token: 'abcdef0123456789abcdef0123456789' } } })
+  await first
+  assert.equal(signals[0].aborted, true)
+  await module.notify({})
+  assert.equal(destinations[1], 'http://192.168.1.21:8080/api/reminder')
+  await entry.update({ config: { esp32: { enabled: false } } })
+  await module.notify({})
+  assert.equal(destinations.length, 2)
+  assert.equal(mounts, 1)
+})
 
 test('real Loader updates the enabled reference and runtime without remounting', async t => {
   const ctx = new Context()

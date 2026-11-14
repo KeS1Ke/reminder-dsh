@@ -1,7 +1,7 @@
 {
   "name": "@kesike/reminder-dsh",
   "version": "0.2.2",
-  "description": "Windows completion and approval toasts, quick replies, and an optional taskbar badge for DeepSeek Harness · DSH 的 Windows 完成与审批通知、通知内回复和可选任务栏角标",
+  "description": "Windows toasts, quick replies, taskbar badges and ESP32 Wi-Fi completion reminders for DeepSeek Harness · DSH 的 Windows 通知与 ESP32 屏幕、声音提醒",
   "type": "module",
   "main": "lib/index.js",
   "exports": {

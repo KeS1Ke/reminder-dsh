@@ -2,13 +2,15 @@
 
 Native Windows reminders for DeepSeek Harness (DSH). Completion and approval toasts use the session title, and you can reply or handle an approval from the notification. An optional taskbar badge counts completions while the DSH window is in the background.
 
+An independent Wi-Fi output sends completed tasks to [ESP32-BOX3](https://github.com/KeS1Ke/ESP32-BOX3) for an on-device Chinese notification and chime. This output works with Windows, Linux and macOS DSH backends.
+
 DeepSeek Harness 的 Windows 提醒插件。完成和审批通知以会话标题为标题，支持可选 AI 总结、通知内回复和审批，也可以在任务栏显示未查看的完成数。打开 **设置 → 通知** 即可配置。
 
 [简体中文安装与使用说明](https://github.com/KeS1Ke/reminder-dsh/blob/main/README.zh-CN.md) · [npm package](https://www.npmjs.com/package/@kesike/reminder-dsh)
 
 ## Install or update / 安装或更新
 
-Requirements are Windows 10 or 11 with an interactive desktop session, Node.js 24.9.0 or later, and DSH `>=0.2.2-rc.1 <0.3.0`. Toasts use the built-in Windows PowerShell. The taskbar badge needs PowerShell 7 (`pwsh.exe` on PATH). Both run on the machine hosting the DSH backend.
+Requirements are Node.js 24.9.0 or later and DSH `>=0.2.2-rc.1 <0.3.0`. Windows notifications additionally require Windows 10 or 11 with an interactive desktop session. Toasts use the built-in Windows PowerShell. The taskbar badge needs PowerShell 7 (`pwsh.exe` on PATH). Both run on the machine hosting the DSH backend. ESP32-only reminders need neither Windows nor PowerShell.
 
 ```powershell
 dsh plugin --profile desktop add @kesike/reminder-dsh
@@ -24,6 +26,8 @@ Open **Settings → Notifications** in DSH.
 
 | Setting | Default | What it controls |
 | --- | --- | --- |
+| ESP32 Wi-Fi completion reminders | Off | Paired device notifications with session titles and final-answer excerpts |
+| ESP32 sound | On | Two short notes at the device media volume |
 | Windows system notifications | On | Native completion and approval toasts |
 | Show task summary in notifications | On | A short AI summary of the final answer in completion toasts |
 | Notification sound | On | A one-second ding with each toast, or a wav / mp3 upload of up to 5 seconds |
@@ -32,6 +36,18 @@ Open **Settings → Notifications** in DSH.
 | Target window title contains | Blank | Automatic window matching, or a unique title substring you specify |
 
 Apply switch changes together with **Save** at the bottom of the page. **Cancel** discards pending switch changes. The title and interval fields have separate save buttons. Saved settings apply without restarting the plugin.
+
+## ESP32 setup
+
+1. Update the ESP32-BOX3 firmware to a revision with `POST /api/reminder`. Join the same Wi-Fi as the computer, or connect the board to the computer's mobile hotspot. Local client traffic must be allowed; Internet access is unnecessary.
+2. Enable **Setting → Phone control** on the board and use **Address mode** to read its HTTP address and six-digit code. If a phone is already paired, toggle Phone control off and on to obtain a new code.
+3. In DSH **Settings → Notifications → ESP32 Wi-Fi completion reminders**, enter the address (for example `http://192.168.137.22:8080`) and code. Click **Pair and enable**, then **Send test reminder**.
+
+Successful main-session completions send immediately, independently of Windows summaries and toast intervals. Failed/cancelled turns, subagents and restored history do not notify. The board displays the title and a final-answer excerpt for 10 seconds; **Dismiss / Next** advances early. Up to four messages wait on-device. Its existing embedded font supports simplified Chinese. The chime mixes through the existing I2S task, does not resume paused music, and needs no SD sound file. Enable a media module and use a nonzero media volume; a missing speaker still permits text notifications. Screen privacy remains in effect.
+
+The **DSH backend computer** must reach the device's numeric private IPv4 address on port 8080. Browser requests go through the authenticated DSH backend. Re-pair after an address change, board restart or Phone control reset. Pairing uses the existing single-client phone session, so the computer or phone uses that session. Saved credentials survive a DSH restart, but not a board restart. They live in the DSH profile; use your own trusted LAN for its HTTP connection.
+
+Each message gets at most three attempts, with a 2.5-second network deadline per attempt and the same id on retries. The board remembers sixteen recent ids to avoid duplicate chimes. No long-term offline backlog is kept; failures and full queues are reported in the DSH log. At most eight sends can be pending. A sleeping computer cannot send reminders. See the [Chinese setup guide](README.zh-CN.md#esp32-屏幕和声音提醒).
 
 ## Notifications and taskbar badge
 
