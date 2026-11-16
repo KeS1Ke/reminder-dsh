@@ -22,6 +22,7 @@
     "example.patch.yml"
   ],
   "scripts": {
+    "postinstall": "node scripts/postinstall.js",
     "test": "node --test test/*.test.js",
     "test:popup": "node scripts/test-popup.js",
     "test:settings-ui": "node test/settings.browser.js",

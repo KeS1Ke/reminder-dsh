@@ -8,15 +8,15 @@ DeepSeek Harness 的 Windows 提醒插件。完成和审批通知以会话标题
 
 ## Install or update / 安装或更新
 
-Requirements are Windows 10 or 11 with an interactive desktop session, Node.js 24.9.0 or later, and DSH `>=0.2.2-rc.1 <0.3.0`. Toasts use the built-in Windows PowerShell. The taskbar badge needs PowerShell 7 (`pwsh.exe` on PATH). Both run on the machine hosting the DSH backend.
+Requirements are Windows 10 or 11 with an interactive desktop session, Node.js 24.9.0 or later, and DSH `>=0.2.2-rc.1 <0.3.0`. Both system notifications and the taskbar badge use the bundled native Rust helper (`dsh-reminder-helper.exe`, `win32-x64`) — no PowerShell 7 (`pwsh.exe`) or runtime C# compilation is required. Both run on the machine hosting the DSH backend.
 
 ```powershell
 dsh plugin --profile desktop add @kesike/reminder-dsh
 ```
 
-Restart DSH Desktop after installation or an update. For DSH Web, use the profile that runs your Windows backend, for example `dsh plugin --profile web add @kesike/reminder-dsh`, then restart that backend. For a GitHub install, use `github:KeS1Ke/reminder-dsh` in place of the npm package name.
+Restart DSH Desktop after installation or an update. For DSH Web, use the profile that runs your Windows backend, for example `dsh plugin --profile web add @kesike/reminder-dsh`, then restart that backend. For a GitHub install, use `github:KeS1Ke/reminder-dsh` in place of the npm package name. When installing from source on Windows without a prebuilt release binary, build `native/Cargo.toml` or set `DSH_REMINDER_HELPER_PATH` to your compiled `dsh-reminder-helper.exe`.
 
-桌面版执行上面的命令后重启 DSH。Web 版请把 `desktop` 换成实际运行 Windows 后端的 profile。系统通知使用 Windows 自带的 PowerShell，任务栏角标需要 PATH 中有 PowerShell 7。
+桌面版执行上面的命令后重启 DSH。Web 版请把 `desktop` 换成实际运行 Windows 后端的 profile。系统通知与任务栏角标统一由原生 Rust 辅助程序 `dsh-reminder-helper.exe` 提供，无需安装 PowerShell 7 或运行时编译 C#。
 
 ## Choose what you see
 
@@ -48,7 +48,7 @@ Click the body of a completion or approval toast to request its original session
 
 Windows click delivery and foreground activation can still be intermittent. If DSH stays in the background or the session does not switch, open DSH and select the session named in the notification. Test with a fresh toast after upgrading or restarting. Existing toasts can outlive the backend and their local routes.
 
-Windows manages banners and Notification Center. The plugin uses a per-user notification identity and, when it finds DSH Desktop, a per-user Start menu shortcut. Interaction routes run through the plugin's local activator and named pipe.
+Windows manages banners and Notification Center. The plugin uses a per-user notification identity and, when it finds DSH Desktop, a per-user Start menu shortcut. Interaction routes run through the native helper's COM activator (`toast-host`) over JSON-lines stdio.
 
 ## Profile configuration and removal
 
@@ -59,12 +59,14 @@ To remove this plugin, run `dsh plugin --profile desktop remove @kesike/reminder
 ## Development
 
 ```powershell
+cargo test --manifest-path native/Cargo.toml
+cargo build --release --manifest-path native/Cargo.toml
 npm ci --ignore-scripts
 npm test
 npm run test:settings-ui
 npm pack --dry-run
 ```
 
-Use `npm run test:popup` for a sample Windows toast and `npm run test:taskbar -- "window title"` for a native badge check. Set `CHROMIUM_PATH` if the settings test needs a specific Chromium executable.
+Use `npm run test:popup` for a sample Windows toast and `npm run test:taskbar -- "window title"` for a native badge check. Set `DSH_REMINDER_HELPER_PATH` to test a custom `dsh-reminder-helper.exe` build, or `CHROMIUM_PATH` if the settings test needs a specific Chromium executable.
 
 Source and icon licensing are available in the [repository](https://github.com/KeS1Ke/reminder-dsh). The plugin is distributed under [MIT](https://github.com/KeS1Ke/reminder-dsh/blob/main/LICENSE).
