@@ -7,8 +7,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use windows::core::{Interface, GUID, PCWSTR};
-use windows::Win32::Foundation::PROPERTYKEY;
-use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
 use windows::Win32::System::Com::{CoCreateInstance, IPersistFile, CLSCTX_INPROC_SERVER, STGM};
 use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
 use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
@@ -30,6 +28,13 @@ const SHCNF_PATHW: u32 = 0x0005;
 const SHCNF_FLUSH: u32 = 0x1000;
 
 #[repr(C)]
+struct RawPropertyKey {
+    fmtid: GUID,
+    pid: u32,
+}
+
+#[allow(dead_code)]
+#[repr(C)]
 struct RawPropVariant {
     vt: u16,
     reserved1: u16,
@@ -37,6 +42,25 @@ struct RawPropVariant {
     reserved3: u16,
     data: *mut c_void,
     padding: usize,
+}
+
+#[allow(dead_code)]
+#[repr(C)]
+struct IPropertyStoreVtblRaw {
+    query_interface:
+        unsafe extern "system" fn(*mut c_void, *const GUID, *mut *mut c_void) -> i32,
+    add_ref: unsafe extern "system" fn(*mut c_void) -> u32,
+    release: unsafe extern "system" fn(*mut c_void) -> u32,
+    get_count: unsafe extern "system" fn(*mut c_void, *mut u32) -> i32,
+    get_at: unsafe extern "system" fn(*mut c_void, u32, *mut RawPropertyKey) -> i32,
+    get_value:
+        unsafe extern "system" fn(*mut c_void, *const RawPropertyKey, *mut RawPropVariant) -> i32,
+    set_value: unsafe extern "system" fn(
+        *mut c_void,
+        *const RawPropertyKey,
+        *const RawPropVariant,
+    ) -> i32,
+    commit: unsafe extern "system" fn(*mut c_void) -> i32,
 }
 
 static REGISTERED: OnceLock<Mutex<HashSet<(String, Option<String>)>>> = OnceLock::new();
@@ -89,8 +113,10 @@ fn write_and_swap_shortcut(
         let store: IPropertyStore = shell_link
             .cast()
             .map_err(|e| format!("QueryInterface(IPropertyStore) failed: {e}"))?;
+        let store_raw = store.as_raw();
+        let store_vtbl = &*(*(store_raw as *const *const IPropertyStoreVtblRaw));
 
-        let key_id = PROPERTYKEY {
+        let key_id = RawPropertyKey {
             fmtid: PKEY_AUMID_FMTID,
             pid: 5,
         };
@@ -102,15 +128,16 @@ fn write_and_swap_shortcut(
             data: app_id_w.as_ptr() as *mut c_void,
             padding: 0,
         };
-        store
-            .SetValue(
-                &key_id,
-                &pv_id as *const RawPropVariant as *const PROPVARIANT,
-            )
-            .map_err(|e| format!("IPropertyStore::SetValue(AUMID) failed: {e}"))?;
+        let hr_id = (store_vtbl.set_value)(store_raw, &key_id, &pv_id);
+        if hr_id < 0 {
+            return Err(format!(
+                "IPropertyStore::SetValue(AUMID) failed: 0x{:08X}",
+                hr_id as u32
+            ));
+        }
 
         let mut activator_guid = ACTIVATOR_GUID;
-        let key_clsid = PROPERTYKEY {
+        let key_clsid = RawPropertyKey {
             fmtid: PKEY_AUMID_FMTID,
             pid: 26,
         };
@@ -122,12 +149,13 @@ fn write_and_swap_shortcut(
             data: (&mut activator_guid as *mut GUID) as *mut c_void,
             padding: 0,
         };
-        store
-            .SetValue(
-                &key_clsid,
-                &pv_clsid as *const RawPropVariant as *const PROPVARIANT,
-            )
-            .map_err(|e| format!("IPropertyStore::SetValue(ToastActivatorCLSID) failed: {e}"))?;
+        let hr_clsid = (store_vtbl.set_value)(store_raw, &key_clsid, &pv_clsid);
+        if hr_clsid < 0 {
+            return Err(format!(
+                "IPropertyStore::SetValue(ToastActivatorCLSID) failed: 0x{:08X}",
+                hr_clsid as u32
+            ));
+        }
 
         store
             .Commit()

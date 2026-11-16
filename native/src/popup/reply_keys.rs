@@ -209,7 +209,7 @@ pub fn start() {
                 break;
             }
         }
-    }
+    };
 }
 
 pub fn stop() {
