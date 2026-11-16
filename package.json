@@ -35,9 +35,6 @@
   "dependencies": {
     "@deepseek-ai/schemastery": "3.19.0"
   },
-  "optionalDependencies": {
-    "@kesike/reminder-dsh-win32-x64": "0.2.2"
-  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
