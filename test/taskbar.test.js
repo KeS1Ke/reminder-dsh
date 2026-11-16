@@ -3,9 +3,9 @@ import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
 import { spawnSync } from 'node:child_process'
-import { fileURLToPath } from 'node:url'
 import { createTaskbarNotifier } from '../src/modules/taskbar/windows.js'
 import { Config, createTaskbarModule } from '../src/modules/taskbar/index.js'
+import { resolveHelperBinary } from '../src/native-helper.js'
 
 function rig() {
   const calls = []
@@ -27,10 +27,11 @@ function rig() {
   }
 }
 
-test('taskbar badges use pwsh with the target window and increment the unread count', async () => {
+test('taskbar badges use the native helper with the target window and increment the unread count', async () => {
   const h = rig()
   const first = h.notifier.notify()
-  assert.equal(h.invocation()[0], 'pwsh.exe')
+  assert.match(h.invocation()[0], /dsh-reminder-helper\.exe$/)
+  assert.deepEqual(h.invocation()[1], ['taskbar-badge'])
   assert.equal(h.invocation()[2].shell, false)
   assert.deepEqual(JSON.parse(h.child.stdin.read()), {
     hostPid: process.pid, windowTitle: 'DSH " $() 中文', count: 1, maxMinutes: 120,
@@ -89,7 +90,7 @@ test('taskbar spawn and target lookup failures are reported', async () => {
   await assert.rejects(pending, /未找到 DSH 窗口/)
   const missing = rig(), result = missing.notifier.notify()
   missing.child.emit('error', Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
-  await assert.rejects(result, /PowerShell 7/)
+  await assert.rejects(result, /任务栏辅助程序/)
 })
 
 test('taskbar disabled by default does not start a process', async () => {
@@ -100,16 +101,18 @@ test('taskbar disabled by default does not start a process', async () => {
 })
 
 test('badge startup keeps queued count updates', { skip: process.platform !== 'win32' }, () => {
-  const path = fileURLToPath(new URL('../src/modules/taskbar/badge.ps1', import.meta.url))
-  const result = spawnSync('pwsh.exe', ['-NoProfile', '-NonInteractive', '-File', path, '-DrainSelfTest'], {
+  const helper = resolveHelperBinary()
+  assert.ok(helper, 'expected compiled or packaged dsh-reminder-helper.exe on Windows')
+  const result = spawnSync(helper, ['--drain-self-test'], {
     encoding: 'utf8', timeout: 15000, windowsHide: true,
   })
   assert.equal(result.status, 0, result.error?.message ?? result.stderr)
 })
 
-test('taskbar Win32 badge helper compiles under pwsh on Windows', { skip: process.platform !== 'win32' }, () => {
-  const path = fileURLToPath(new URL('../src/modules/taskbar/badge.ps1', import.meta.url))
-  const result = spawnSync('pwsh.exe', ['-NoProfile', '-NonInteractive', '-File', path, '-ValidateOnly'], {
+test('taskbar Win32 badge helper initializes GDI+ and COM on Windows', { skip: process.platform !== 'win32' }, () => {
+  const helper = resolveHelperBinary()
+  assert.ok(helper, 'expected compiled or packaged dsh-reminder-helper.exe on Windows')
+  const result = spawnSync(helper, ['--validate-taskbar'], {
     encoding: 'utf8', timeout: 30000, windowsHide: true,
   })
   assert.equal(result.status, 0, result.error?.message ?? result.stderr)

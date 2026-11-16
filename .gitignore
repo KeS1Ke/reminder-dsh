@@ -6,6 +6,9 @@ dist/
 build/
 coverage/
 *.tgz
+native/target/
+packages/helper-win32-x64/bin/
+/bin/
 
 # Local analysis / agent artifacts
 .artifacts/

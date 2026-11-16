@@ -15,8 +15,25 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        if: runner.os == 'Windows'
+      - uses: Swatinem/rust-cache@v2
+        if: runner.os == 'Windows'
+        with:
+          workspaces: native
+      - name: Test and build Rust helper
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cargo test --manifest-path native/Cargo.toml
+          cargo build --release --manifest-path native/Cargo.toml
+          New-Item -ItemType Directory -Force packages/helper-win32-x64/bin | Out-Null
+          Copy-Item native/target/release/dsh-reminder-helper.exe packages/helper-win32-x64/bin/dsh-reminder-helper.exe -Force
       - run: npm ci --ignore-scripts
       - run: npm test
       - run: npm run test:settings-ui
         if: runner.os == 'Linux'
       - run: npm pack --dry-run
+      - name: Check optional win32-x64 package
+        if: runner.os == 'Windows'
+        run: npm pack --dry-run ./packages/helper-win32-x64

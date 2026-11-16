@@ -1,0 +1,47 @@
+name: Release Native Helper
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-win32-x64:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+      - name: Build and verify helper
+        shell: pwsh
+        run: |
+          cargo test --manifest-path native/Cargo.toml
+          cargo build --release --manifest-path native/Cargo.toml
+          New-Item -ItemType Directory -Force packages/helper-win32-x64/bin | Out-Null
+          Copy-Item native/target/release/dsh-reminder-helper.exe packages/helper-win32-x64/bin/dsh-reminder-helper.exe -Force
+      - run: npm ci --ignore-scripts
+      - run: npm test
+      - name: Prepare release artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release-assets | Out-Null
+          $bin = 'release-assets/dsh-reminder-helper-win32-x64.exe'
+          Copy-Item native/target/release/dsh-reminder-helper.exe $bin -Force
+          $hash = (Get-FileHash $bin -Algorithm SHA256).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText("$bin.sha256", "$hash  dsh-reminder-helper-win32-x64.exe`n", [Text.UTF8Encoding]::new($false))
+      - name: Upload GitHub Release assets
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-assets/dsh-reminder-helper-win32-x64.exe
+            release-assets/dsh-reminder-helper-win32-x64.exe.sha256

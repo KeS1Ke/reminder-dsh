@@ -1,17 +1,16 @@
 import { spawn } from 'node:child_process'
-import { win32 } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { ensureHelperBinary, resolveHelperBinary } from '../../native-helper.js'
 import { createToastReplies } from './reply.js'
 
-const scriptPath = fileURLToPath(new URL('./toast.ps1', import.meta.url))
-const powershell = win32.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+const assetsDir = fileURLToPath(new URL('../../../assets', import.meta.url))
 // Windows shows one banner per notification identity. The next identity stacks a new banner above the previous one.
 const stackIds = ['KeS1Ke.DSH', 'KeS1Ke.DSH.2', 'KeS1Ke.DSH.3', 'KeS1Ke.DSH.4', 'KeS1Ke.DSH.5']
 
 export function createWindowsToast(config, launchHost = spawn) {
   const lifetime = new AbortController()
   const replies = createToastReplies()
-  let stackIndex = 0, host, chain = Promise.resolve()
+  let stackIndex = 0, nextId = 1, host, chain = Promise.resolve()
 
   function enqueue(task) {
     const run = chain.then(task, task)
@@ -19,31 +18,60 @@ export function createWindowsToast(config, launchHost = spawn) {
     return run
   }
 
-  function writeLine(target, line) {
+  function writeJson(target, message) {
     const stdin = target?.child?.stdin
     if (!stdin?.writable) return false
     try {
-      stdin.write(line, 'utf8')
+      stdin.write(JSON.stringify(message) + '\n', 'utf8')
       return true
     } catch {
       return false
     }
   }
 
-  // One Windows PowerShell process shows every later toast. Add-Type runs once inside it.
+  async function resolveLaunchExe() {
+    const resolved = resolveHelperBinary()
+    if (resolved) return resolved
+    if (launchHost !== spawn) return 'dsh-reminder-helper.exe'
+    return ensureHelperBinary()
+  }
+
+  function handleActivation(msg) {
+    const current = host
+    Promise.resolve()
+      .then(() => replies.dispatch(msg.argument, msg.input))
+      .then(Boolean, () => false)
+      .then(ok => {
+        if (current) writeJson(current, { type: 'ack', id: msg.id, ok })
+      })
+  }
+
+  // One native helper process shows every later toast and hosts the COM activator & Enter hook.
   function startHost() {
+    if (host) return host.ready
+    const resolved = resolveHelperBinary() ?? (launchHost !== spawn ? 'dsh-reminder-helper.exe' : undefined)
+    if (!resolved) {
+      return resolveLaunchExe().then(startWithExe)
+    }
+    return startWithExe(resolved)
+  }
+
+  function startWithExe(exe) {
     if (host) return host.ready
     const env = { ...process.env }
     // Desktop Host runs Electron as Node. The activator must launch dsh://open in GUI mode.
     delete env.ELECTRON_RUN_AS_NODE
-    const child = launchHost(powershell, [
-      '-NoLogo', '-NoProfile', '-NonInteractive', '-MTA', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, '-HostMode',
-    ], { env, windowsHide: true })
+    const child = launchHost(exe, ['toast-host', '--assets-dir', assetsDir], {
+      env, windowsHide: true, shell: false,
+    })
     let buffer = '', stderr = '', settled = false
-    const waiters = []
+    const waiters = new Map()
     const state = { child, waiters }
     host = state
-    const failWaiters = error => { waiters.splice(0).forEach(waiter => waiter.reject(error)) }
+    const failWaiters = error => {
+      for (const waiter of waiters.values()) waiter.reject(error)
+      waiters.clear()
+    }
     let timer
     state.ready = new Promise((resolve, reject) => {
       const finishReady = error => {
@@ -55,9 +83,12 @@ export function createWindowsToast(config, launchHost = spawn) {
       }
       // Drop a failed process immediately. Otherwise every later toast awaits the same rejected ready.
       const fail = error => {
+        const normalized = error?.code === 'ENOENT'
+          ? new Error(`找不到 Windows 通知辅助程序 (${exe})，请重新安装插件或设置 DSH_REMINDER_HELPER_PATH。`)
+          : error
         if (host === state) host = undefined
-        finishReady(error)
-        failWaiters(error)
+        finishReady(normalized)
+        failWaiters(normalized)
       }
       timer = setTimeout(() => {
         fail(new Error('Windows 通知服务启动超时'))
@@ -70,18 +101,35 @@ export function createWindowsToast(config, launchHost = spawn) {
           const line = buffer.slice(0, index).trim()
           buffer = buffer.slice(index + 1)
           if (!line) continue
-          if (!settled) {
-            if (line === 'ready') finishReady()
-            else {
+          let msg
+          try {
+            msg = JSON.parse(line)
+          } catch {
+            if (!settled) {
               fail(new Error(line))
               try { child.kill() } catch {}
             }
             continue
           }
-          const waiter = waiters.shift()
-          if (!waiter) continue
-          if (line === 'ok') waiter.resolve()
-          else waiter.reject(new Error(line.startsWith('error ') ? line.slice(6) : line))
+          if (!settled) {
+            if (msg.type === 'ready') finishReady()
+            else {
+              fail(new Error(msg.error ?? line))
+              try { child.kill() } catch {}
+            }
+            continue
+          }
+          if (msg.type === 'activate') {
+            handleActivation(msg)
+            continue
+          }
+          if (msg.type === 'show-result') {
+            const waiter = waiters.get(msg.id)
+            if (!waiter) continue
+            waiters.delete(msg.id)
+            if (msg.ok) waiter.resolve()
+            else waiter.reject(new Error(msg.error || 'Windows 通知发送失败'))
+          }
         }
       })
       child.stderr.setEncoding('utf8').on('data', chunk => { stderr = (stderr + chunk).slice(-2048) })
@@ -98,29 +146,27 @@ export function createWindowsToast(config, launchHost = spawn) {
   function requestToast(payload) {
     const current = host
     if (!current?.child?.stdin?.writable) return Promise.reject(new Error('Windows 通知服务不可用'))
+    const id = nextId++
     return new Promise((resolve, reject) => {
       let settled = false
       const waiter = {}
       const finish = (error, drop) => {
         if (settled) return
         settled = true
-        if (drop) {
-          const index = current.waiters.indexOf(waiter)
-          if (index >= 0) current.waiters.splice(index, 1)
-        }
+        if (drop) current.waiters.delete(id)
         if (error) reject(error)
         else resolve()
       }
       waiter.resolve = () => finish()
       waiter.reject = error => finish(error)
-      current.waiters.push(waiter)
+      current.waiters.set(id, waiter)
       const failWrite = error => {
         if (host === current) host = undefined
         finish(error, true)
         try { current.child.kill() } catch {}
       }
       try {
-        current.child.stdin.write(JSON.stringify(payload) + '\n', 'utf8', error => {
+        current.child.stdin.write(JSON.stringify({ type: 'show', id, ...payload }) + '\n', 'utf8', error => {
           if (error) failWrite(error)
         })
       } catch (error) {
@@ -149,7 +195,7 @@ export function createWindowsToast(config, launchHost = spawn) {
       const disarm = () => {
         const target = armedHost
         armedHost = undefined
-        if (target) writeLine(target, 'reply-keys-off\n')
+        if (target) writeJson(target, { type: 'reply-keys', armed: false })
       }
       try {
         if (onOpen) {
@@ -190,7 +236,7 @@ export function createWindowsToast(config, launchHost = spawn) {
           payload.appId = stackIds[stackIndex]
           stackIndex = (stackIndex + 1) % stackIds.length
           if (typeof sound === 'string' && sound) payload.sound = sound
-          if (onReply && writeLine(host, 'reply-keys\n')) armedHost = host
+          if (onReply && writeJson(host, { type: 'reply-keys', armed: true })) armedHost = host
           try { await requestToast(payload) }
           catch (error) { if (signal.aborted) return; throw error }
           sent = true

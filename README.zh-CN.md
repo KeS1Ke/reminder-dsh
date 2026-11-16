@@ -6,13 +6,13 @@
 
 ## 安装或更新
 
-需要 Windows 10/11 本机交互式桌面会话、Node.js 24.9.0+ 和 DSH `>=0.2.2-rc.1 <0.3.0`。系统通知使用 Windows 自带的 `powershell.exe`，任务栏角标需要 PATH 中有 PowerShell 7（`pwsh.exe`）。提醒在 DSH 后端所在的 Windows 机器上出现。
+需要 Windows 10/11 本机交互式桌面会话、Node.js 24.9.0+ 和 DSH `>=0.2.2-rc.1 <0.3.0`。系统通知和任务栏角标均使用自带的原生 Rust 辅助程序 `dsh-reminder-helper.exe`（win32-x64），无需 PowerShell 7（`pwsh.exe`）或运行时编译 C#。提醒在 DSH 后端所在的 Windows 机器上出现。
 
 ```powershell
 dsh plugin --profile desktop add @kesike/reminder-dsh
 ```
 
-安装或更新后完全退出并重新打开 DSH Desktop。Web 版请使用实际运行 Windows 后端的 profile，例如 `dsh plugin --profile web add @kesike/reminder-dsh`，然后重启该后端。也可把命令里的包名换成 `github:KeS1Ke/reminder-dsh` 从 GitHub 安装。
+安装或更新后完全退出并重新打开 DSH Desktop。Web 版请使用实际运行 Windows 后端的 profile，例如 `dsh plugin --profile web add @kesike/reminder-dsh`，然后重启该后端。也可把命令里的包名换成 `github:KeS1Ke/reminder-dsh` 从 GitHub 安装；若从源码安装且无对应版本的预编译 Release 二进制，请在 Windows 上先编译 `native/Cargo.toml` 或通过 `DSH_REMINDER_HELPER_PATH` 指定 `dsh-reminder-helper.exe`。
 
 ## 设置提醒方式
 
@@ -44,7 +44,7 @@ dsh plugin --profile desktop add @kesike/reminder-dsh
 
 实际点击仍可能遇到 Windows 回调未送达或窗口未置前。如果没有跳转，请打开 DSH，按通知显示的会话标题找到原会话。更新或重启后请使用新生成的通知，旧通知的跳转和交互入口可能随原后端退出而失效。
 
-横幅和通知中心由 Windows 管理。插件使用当前用户的通知身份，检测到 DSH Desktop 时会创建当前用户的开始菜单快捷方式。通知交互通过本机激活器和命名管道交给插件后端。
+横幅和通知中心由 Windows 管理。插件使用当前用户的通知身份，检测到 DSH Desktop 时会创建当前用户的开始菜单快捷方式。通知交互通过原生辅助程序的 COM 激活器（`toast-host`）经由标准输入输出 JSON 行协议交给插件后端。
 
 ## 配置文件与卸载
 
@@ -55,12 +55,14 @@ dsh plugin --profile desktop add @kesike/reminder-dsh
 ## 开发验证
 
 ```powershell
+cargo test --manifest-path native/Cargo.toml
+cargo build --release --manifest-path native/Cargo.toml
 npm ci --ignore-scripts
 npm test
 npm run test:settings-ui
 npm pack --dry-run
 ```
 
-在 Windows 上用 `npm run test:popup` 发送测试通知，或用 `npm run test:taskbar -- "窗口标题"` 检查角标。设置页浏览器测试可通过 `CHROMIUM_PATH` 指定 Chromium。
+在 Windows 上用 `npm run test:popup` 发送测试通知，或用 `npm run test:taskbar -- "窗口标题"` 检查角标。可通过 `DSH_REMINDER_HELPER_PATH` 指定自定义的 `dsh-reminder-helper.exe`，设置页浏览器测试可通过 `CHROMIUM_PATH` 指定 Chromium。
 
 插件代码采用 [MIT](https://github.com/KeS1Ke/reminder-dsh/blob/main/LICENSE) 许可证，图标来源及许可见 [资源说明](https://github.com/KeS1Ke/reminder-dsh/blob/main/assets/README.md)。

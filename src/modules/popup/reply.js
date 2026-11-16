@@ -1,77 +1,22 @@
 import { randomBytes } from 'node:crypto'
-import { createServer } from 'node:net'
 
 const replyLifetimeMs = 24 * 60 * 60 * 1000
 const maxReplyChars = 8000
-const replyPattern = /^([a-f0-9]{32}) ([A-Za-z0-9+/]+={0,2})$/
-const openPattern = /^([a-f0-9]{32})$/
+const openPattern = /^(?:[a-f0-9]{32}:)?([a-f0-9]{32}):open$/
+const decisionPattern = /^(?:[a-f0-9]{32}:)?([a-f0-9]{32}):decision$/
+const replyPattern = /^(?:[a-f0-9]{32}:)?([a-f0-9]{32})$/
 
 /** Route a local Windows activation to the callback captured when its toast was sent. */
 export function createToastReplies() {
-  const pipeId = randomBytes(16).toString('hex')
-  const routes = new Map(), sockets = new Set()
-  let listening, disposed = false
-  const server = createServer(socket => {
-    sockets.add(socket)
-    socket.once('close', () => sockets.delete(socket))
-    socket.on('error', () => socket.destroy())
-    socket.setTimeout(6000, () => socket.destroy())
-    socket.setEncoding('ascii')
-    let request = ''
-    const receive = async chunk => {
-      request += chunk
-      // Base64 of at most 8000 UTF-16 code units, plus the route token.
-      if (request.length > 32_034) { socket.destroy(); return }
-      if (!request.endsWith('\n')) return
-      socket.removeListener('data', receive)
-      const line = request.slice(0, -1)
-      const open = openPattern.exec(line)
-      if (open) {
-        const route = routes.get(open[1])
-        if (!route?.onOpen) { socket.end('failed\n'); return }
-        let acknowledgment = 'failed'
-        try { await route.onOpen(); acknowledgment = 'ok' } catch {}
-        socket.end(acknowledgment + '\n')
-        return
-      }
-      const match = replyPattern.exec(line)
-      const route = match && routes.get(match[1])
-      const text = match && Buffer.from(match[2], 'base64').toString('utf8').trim()
-      if (!route || !text || text.length > maxReplyChars) { socket.end('failed\n'); return }
-      if (!route.delivery) {
-        const reply = route.onReply
-        route.onReply = undefined
-        route.delivery = Promise.resolve().then(() => reply(text)).then(() => 'ok', () => 'failed')
-      }
-      socket.end((await route.delivery) + '\n')
-    }
-    socket.on('data', receive)
-  })
-  // Keep one listener after startup so a later pipe error cannot crash the process.
-  server.on('error', () => {})
-
-  function listen() {
-    listening ??= new Promise((resolve, reject) => {
-      const fail = error => {
-        server.removeListener('error', fail)
-        reject(error)
-      }
-      server.once('error', fail)
-      server.listen(`\\\\.\\pipe\\kesike-dsh-reply-${pipeId}`, () => {
-        server.removeListener('error', fail)
-        server.unref()
-        resolve()
-      })
-    }).catch(error => { listening = undefined; throw error })
-    return listening
-  }
+  const routes = new Map()
+  let disposed = false
 
   function add(route, signal, suffix) {
     const token = randomBytes(16).toString('hex')
     // Callers can replace entry.release; the timer and abort path must see that replacement.
     const entry = {
       ...route,
-      argument: `${pipeId}:${token}${suffix}`,
+      argument: `${token}${suffix}`,
       release() {
         signal?.removeEventListener('abort', onAbort)
         clearTimeout(timer)
@@ -86,24 +31,62 @@ export function createToastReplies() {
   }
 
   return {
-    async register(onReply, signal) {
-      if (disposed || signal?.aborted) return
-      await listen()
+    register(onReply, signal) {
       if (disposed || signal?.aborted) return
       return add({ onReply }, signal, '')
     },
     /** Body-click route: navigation repeats on every activation, unlike a one-shot reply. */
-    async registerOpen(onOpen, signal) {
-      if (disposed || signal?.aborted) return
-      await listen()
+    registerOpen(onOpen, signal) {
       if (disposed || signal?.aborted) return
       return add({ onOpen }, signal, ':open')
+    },
+    async dispatch(argument, input) {
+      if (disposed || typeof argument !== 'string') return false
+
+      const openMatch = openPattern.exec(argument)
+      if (openMatch) {
+        const route = routes.get(openMatch[1])
+        if (!route?.onOpen) return false
+        try {
+          await route.onOpen()
+          return true
+        } catch {
+          return false
+        }
+      }
+
+      const decisionMatch = decisionPattern.exec(argument)
+      if (decisionMatch) {
+        const route = routes.get(decisionMatch[1])
+        if (!route || (!route.onReply && !route.delivery)) return false
+        if (!route.delivery) {
+          const decision = route.onReply
+          route.onReply = undefined
+          route.delivery = Promise.resolve().then(() => decision()).then(() => true, () => false)
+        }
+        return route.delivery
+      }
+
+      const replyMatch = replyPattern.exec(argument)
+      if (replyMatch) {
+        const route = routes.get(replyMatch[1])
+        const text = typeof input?.reply === 'string' ? input.reply.trim() : ''
+        if (!route || (!route.onReply && !route.delivery) || !text || text.length > maxReplyChars) {
+          return false
+        }
+        if (!route.delivery) {
+          const reply = route.onReply
+          route.onReply = undefined
+          route.delivery = Promise.resolve().then(() => reply(text)).then(() => true, () => false)
+        }
+        return route.delivery
+      }
+
+      return false
     },
     dispose() {
       disposed = true
       for (const route of routes.values()) route.release()
-      for (const socket of sockets) socket.destroy()
-      void listening?.then(() => server.close(), () => {})
     },
   }
 }

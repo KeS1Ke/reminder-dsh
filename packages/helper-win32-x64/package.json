@@ -1,0 +1,22 @@
+{
+  "name": "@kesike/reminder-dsh-win32-x64",
+  "version": "0.2.2",
+  "description": "Prebuilt Windows x64 native helper binary for @kesike/reminder-dsh",
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "files": [
+    "bin",
+    "LICENSE",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KeS1Ke/reminder-dsh.git",
+    "directory": "packages/helper-win32-x64"
+  },
+  "license": "MIT"
+}
