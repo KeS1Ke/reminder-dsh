@@ -45,30 +45,9 @@ pub fn note_input(units: i32, vk: u32, ctrl: bool) -> i32 {
     units
 }
 
-/// Letters arm a possible IME commit. Space or committed Unicode clears it so the following Enter can send.
-pub fn note_commit(armed_commit: bool, vk: u32, ctrl: bool) -> bool {
-    if ctrl {
-        return armed_commit;
-    }
-    if vk == 0x20 || vk == 0xE7 {
-        return false;
-    }
-    if vk == 0x08 || vk == 0x2E {
-        return armed_commit;
-    }
-    if (0x30..=0x39).contains(&vk)
-        || (0x41..=0x5A).contains(&vk)
-        || (0x60..=0x69).contains(&vk)
-        || vk == 0xE5
-    {
-        return true;
-    }
-    armed_commit
-}
-
-/// The first Enter while an IME is composing or in native mode belongs to the IME, not to Send.
-pub fn pass_enter_to_ime(armed_commit: bool, native_ime: bool, composing: bool) -> bool {
-    composing || (armed_commit && native_ime)
+/// Only an active IME composition string should consume Enter instead of sending.
+pub fn pass_enter_to_ime(composing: bool) -> bool {
+    composing
 }
 
 pub fn is_shell_experience_host_exe(image_path: &str) -> bool {
@@ -91,18 +70,18 @@ mod tests {
     }
 
     #[test]
-    fn reply_text_tracking_and_ime_commit() {
+    fn reply_text_tracking_sends_on_first_enter_unless_composing() {
+        let u = note_input(0, 0x41, false);
+        let u = note_input(u, 0x31, false); // e.g. IME candidate selection via digit 1
+        assert!(should_send(false, false, false, u > 0));
+        assert!(!pass_enter_to_ime(false));
+        assert!(pass_enter_to_ime(true));
+
         let u = note_input(0, 0x41, false);
         let u = note_input(u, 0x08, false);
         assert_eq!(u, 0);
         assert_eq!(note_input(0, 0x08, false), 0);
         assert_eq!(note_input(0, 0x56, true), 1);
-        assert!(pass_enter_to_ime(true, true, false));
-        assert!(!pass_enter_to_ime(true, false, false));
-        assert!(pass_enter_to_ime(false, false, true));
-        assert!(!note_commit(true, 0x20, false));
-        assert!(!note_commit(true, 0xE7, false));
-        assert!(note_commit(false, 0x41, false));
     }
 
     #[test]

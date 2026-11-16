@@ -7,7 +7,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crate::popup::reply_keys_logic::{
-    is_shell_experience_host_exe, note_commit, note_input, pass_enter_to_ime, should_send,
+    is_shell_experience_host_exe, note_input, pass_enter_to_ime, should_send,
 };
 use crate::win32::{
     from_wide_buf, CloseHandle, GetCurrentThreadId, OpenProcess, QueryFullProcessImageNameW,
@@ -28,8 +28,6 @@ const REEVALUATE_ID: u32 = 0x8002;
 const LLKHF_INJECTED: u32 = 0x10;
 const KEYEVENTF_KEYUP: u32 = 2;
 const GCS_COMPSTR: u32 = 8;
-const WM_IME_CONTROL: u32 = 0x0283;
-const SMTO_ABORTIFHUNG: u32 = 0x0002;
 
 #[repr(C)]
 struct KbdLlHookStruct {
@@ -101,15 +99,6 @@ extern "system" {
     fn DispatchMessageW(lp_msg: *const Msg) -> isize;
     fn PostThreadMessageW(id_thread: u32, msg: u32, w_param: usize, l_param: isize) -> i32;
     fn keybd_event(b_vk: u8, b_scan: u8, dw_flags: u32, dw_extra_info: usize);
-    fn SendMessageTimeoutW(
-        hwnd: *mut c_void,
-        msg: u32,
-        w_param: usize,
-        l_param: isize,
-        fu_flags: u32,
-        u_timeout: u32,
-        lpdw_result: *mut usize,
-    ) -> isize;
 }
 
 #[link(name = "imm32")]
@@ -131,7 +120,6 @@ static WORKER: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
 
 struct HookState {
     pending_units: i32,
-    commit_pending: bool,
     hook: *mut c_void,
     foreground_hook: *mut c_void,
     seen_hwnd: *mut c_void,
@@ -142,7 +130,6 @@ impl Default for HookState {
     fn default() -> Self {
         Self {
             pending_units: 0,
-            commit_pending: false,
             hook: ptr::null_mut(),
             foreground_hook: ptr::null_mut(),
             seen_hwnd: ptr::null_mut(),
@@ -298,26 +285,6 @@ fn composing(hwnd: *mut c_void) -> bool {
     !ime.is_null() && ime != hwnd && context_composing(ime)
 }
 
-fn native_ime(hwnd: *mut c_void) -> bool {
-    let ime = unsafe { ImmGetDefaultIMEWnd(hwnd) };
-    if ime.is_null() {
-        return false;
-    }
-    let mut mode: usize = 0;
-    let ok = unsafe {
-        SendMessageTimeoutW(
-            ime,
-            WM_IME_CONTROL,
-            0x0001,
-            0,
-            SMTO_ABORTIFHUNG,
-            15,
-            &mut mode,
-        )
-    };
-    ok != 0 && (mode & 1) != 0
-}
-
 fn tap_ctrl_enter() {
     unsafe {
         keybd_event(VK_CONTROL as u8, 0, 0, 0);
@@ -334,7 +301,6 @@ fn install_if_needed() {
         let want = ARMED.load(Ordering::Acquire) > 0 && is_notification_window(&mut st, fg);
         if !want {
             st.pending_units = 0;
-            st.commit_pending = false;
         }
         if want {
             if st.hook.is_null() {
@@ -360,7 +326,6 @@ fn swallow_enter(w_param: usize, l_param: isize) -> bool {
         let mut st = cell.borrow_mut();
         if ARMED.load(Ordering::Acquire) <= 0 {
             st.pending_units = 0;
-            st.commit_pending = false;
             return false;
         }
         let fg = unsafe { GetForegroundWindow() };
@@ -370,32 +335,25 @@ fn swallow_enter(w_param: usize, l_param: isize) -> bool {
         let shift = down(VK_SHIFT);
         if !notification {
             st.pending_units = 0;
-            st.commit_pending = false;
             return false;
         }
         if injected {
             if key.vk_code != VK_RETURN {
                 st.pending_units = note_input(st.pending_units, key.vk_code, ctrl);
-                st.commit_pending = note_commit(st.commit_pending, key.vk_code, ctrl);
             }
             return false;
         }
         if key.vk_code != VK_RETURN {
             st.pending_units = note_input(st.pending_units, key.vk_code, ctrl);
-            st.commit_pending = note_commit(st.commit_pending, key.vk_code, ctrl);
             return false;
         }
         if !should_send(shift, ctrl, alt, st.pending_units > 0) {
             return false;
         }
-        let is_composing = composing(fg);
-        let is_native = !is_composing && st.commit_pending && native_ime(fg);
-        if pass_enter_to_ime(st.commit_pending, is_native, is_composing) {
-            st.commit_pending = false;
+        if pass_enter_to_ime(composing(fg)) {
             return false;
         }
         st.pending_units = 0;
-        st.commit_pending = false;
         true
     })
 }
