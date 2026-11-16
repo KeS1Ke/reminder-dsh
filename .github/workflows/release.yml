@@ -38,6 +38,16 @@ jobs:
           Copy-Item native/target/release/dsh-reminder-helper.exe $bin -Force
           $hash = (Get-FileHash $bin -Algorithm SHA256).Hash.ToLowerInvariant()
           [IO.File]::WriteAllText("$bin.sha256", "$hash  dsh-reminder-helper-win32-x64.exe`n", [Text.UTF8Encoding]::new($false))
+      - name: Upload workflow artifact
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-reminder-helper-win32-x64
+          path: |
+            release-assets/dsh-reminder-helper-win32-x64.exe
+            release-assets/dsh-reminder-helper-win32-x64.exe.sha256
+          if-no-files-found: error
+          retention-days: 7
       - name: Upload GitHub Release assets
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
