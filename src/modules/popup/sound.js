@@ -110,15 +110,19 @@ export function saveCustomSound(name, bytes, dir = soundDirectory()) {
   mkdirSync(dir, { recursive: true })
   const target = join(dir, `notification-sound.${ext}`)
   const temporary = `${target}.tmp`
-  writeFileSync(temporary, body)
-  try { copyFileSync(temporary, target) }
-  catch (error) { rethrowBusy(error) }
-  finally { rmSync(temporary, { force: true }) }
+  // Remove any alternate extension first so an in-use file aborts cleanly without leaving two files on disk.
   for (const fileName of fileNames) {
     const file = join(dir, fileName)
     if (file === target) continue
     try { rmSync(file, { force: true }) }
     catch (error) { rethrowBusy(error) }
+  }
+  try {
+    writeFileSync(temporary, body)
+    copyFileSync(temporary, target)
+  } catch (error) { rethrowBusy(error) }
+  finally {
+    try { rmSync(temporary, { force: true }) } catch {}
   }
   return target
 }

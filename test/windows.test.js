@@ -12,6 +12,7 @@ import { createWindowsToast } from '../src/modules/popup/toast.js'
 import { createToastReplies } from '../src/modules/popup/reply.js'
 import {
   downloadHelperBinary,
+  ensureHelperBinary,
   getHelperAssetUrls,
   parseSha256,
   resolveHelperBinary,
@@ -197,7 +198,7 @@ test('toast body activation routes every click to the captured session', async t
   const replies = createToastReplies()
   t.after(() => replies.dispose())
   const opened = []
-  const route = await replies.registerOpen(() => { opened.push('open') })
+  const route = replies.registerOpen(() => { opened.push('open') })
   assert.match(route.argument, /^[a-f0-9]{32}:open$/)
 
   assert.equal(await replies.dispatch(route.argument), true)
@@ -251,9 +252,9 @@ test('Windows renders distinct native approval actions without a text input', { 
 test('local reply routes isolate sessions, reject empty text and acknowledge duplicate activations once', async t => {
   const replies = createToastReplies(), received = []
   t.after(() => replies.dispose())
-  const first = await replies.register(text => received.push(['first', text]))
-  const second = await replies.register(text => received.push(['second', text]))
-  const decision = await replies.register(() => received.push(['decision', 'allowed']))
+  const first = replies.register(text => received.push(['first', text]))
+  const second = replies.register(text => received.push(['second', text]))
+  const decision = replies.register(() => received.push(['decision', 'allowed']))
 
   assert.equal(await replies.dispatch(first.argument, { reply: ' ' }), false)
   assert.equal(await replies.dispatch(first.argument, {}), false)
@@ -577,4 +578,181 @@ test('native helper resolver honors explicit overrides, optional package, and SH
       return new Response(sample, { status: 200 })
     },
   }), /SHA-256/)
+})
+
+test('disposing during async helper download does not spawn an orphan toast host', async () => {
+  let releaseDownload, launches = 0
+  const download = new Promise(resolve => { releaseDownload = resolve })
+  const notifier = createWindowsToast(
+    config,
+    () => {
+      launches += 1
+      throw new Error('should not spawn after dispose')
+    },
+    { resolve: () => undefined, ensure: () => download },
+  )
+  const pending = notifier.notify({ message: 'aborted-download' })
+  notifier.dispose()
+  releaseDownload('C:\\fake\\dsh-reminder-helper.exe')
+  await pending
+  assert.equal(launches, 0)
+})
+
+test('toast host exiting immediately after ready on both attempts rejects instead of silently succeeding', async () => {
+  let launches = 0
+  const notifier = createWindowsToast(config, () => {
+    launches += 1
+    const stdin = new PassThrough()
+    const stdout = new PassThrough()
+    const stderr = new PassThrough()
+    const child = Object.assign(new EventEmitter(), {
+      stdin, stdout, stderr,
+      kill() { this.killed = true },
+    })
+    process.nextTick(() => {
+      stdout.write(JSON.stringify({ type: 'ready' }) + '\n')
+      child.emit('close', 0)
+    })
+    return child
+  })
+  await assert.rejects(notifier.notify({ message: 'dropped' }), /退出/)
+  assert.equal(launches, 2)
+  notifier.dispose()
+})
+
+test('activation acknowledgment is sent to the emitting toast host instance even after host replacement', async () => {
+  const hosts = []
+  const notifier = createWindowsToast(config, () => {
+    const stdin = new PassThrough()
+    const stdout = new PassThrough()
+    const stderr = new PassThrough()
+    const commands = []
+    let buf = ''
+    stdin.on('data', chunk => {
+      buf += chunk.toString('utf8')
+      let end
+      while ((end = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, end).trim()
+        buf = buf.slice(end + 1)
+        if (!line) continue
+        const msg = JSON.parse(line)
+        commands.push(msg)
+        if (msg.type === 'show') {
+          stdout.write(JSON.stringify({ type: 'show-result', id: msg.id, ok: true }) + '\n')
+        }
+      }
+    })
+    const child = Object.assign(new EventEmitter(), {
+      stdin, stdout, stderr,
+      kill() { this.killed = true; this.emit('close', 0) },
+    })
+    hosts.push({ child, stdout, commands })
+    process.nextTick(() => stdout.write(JSON.stringify({ type: 'ready' }) + '\n'))
+    return child
+  })
+  await notifier.notify({ onOpen() {} })
+  const openArg = hosts[0].commands.find(c => c.type === 'show').open
+  hosts[0].child.emit('close', 0)
+  await notifier.notify({ message: 'second-host' })
+  assert.equal(hosts.length, 2)
+  hosts[0].stdout.write(JSON.stringify({ type: 'activate', id: 7, argument: openArg }) + '\n')
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(hosts[0].commands.filter(c => c.type === 'ack'), [{ type: 'ack', id: 7, ok: true }])
+  assert.deepEqual(hosts[1].commands.filter(c => c.type === 'ack'), [])
+  notifier.dispose()
+})
+
+test('aborting options.signal after sending a reply toast disarms reply-keys and invalidates the reply route', async () => {
+  const fake = fakeHost()
+  const controller = new AbortController()
+  const received = []
+  const notifier = createWindowsToast(config, fake.launch)
+  await notifier.notify({ signal: controller.signal, onReply: text => received.push(text) })
+  const replyArg = fake.payloads[0].reply
+  controller.abort()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(fake.commands.filter(c => c.type === 'reply-keys' && c.armed === false).length, 1)
+  fake.stdout.write(JSON.stringify({ type: 'activate', id: 12, argument: replyArg, input: { reply: 'late' } }) + '\n')
+  while (fake.acks.length < 1) await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(fake.acks[0], { type: 'ack', id: 12, ok: false })
+  assert.deepEqual(received, [])
+  notifier.dispose()
+})
+
+test('downloadHelperBinary times out if the response body stalls after headers', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-helper-timeout-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const sample = Buffer.from('MZ-dummy-helper-binary')
+  const digest = createHash('sha256').update(sample).digest('hex')
+  await assert.rejects(() => downloadHelperBinary({
+    targetPath: join(dir, 'dsh-reminder-helper.exe'),
+    version: '0.2.2',
+    timeoutMs: 30,
+    fetchImpl: async url => {
+      if (url.endsWith('.sha256')) {
+        return new Response(`${digest}  dsh-reminder-helper-win32-x64.exe\n`, { status: 200 })
+      }
+      return {
+        ok: true,
+        status: 200,
+        arrayBuffer: () => new Promise(() => {}),
+      }
+    },
+  }), /超时/)
+})
+
+test('ensureHelperBinary falls back only on permission errors and preserves original error', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-helper-ensure-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const env = { LOCALAPPDATA: dir }
+  const preferred = join(dir, 'preferred', 'dsh-reminder-helper.exe')
+
+  let networkCalls = 0
+  await assert.rejects(() => ensureHelperBinary({
+    platform: 'win32',
+    arch: 'x64',
+    env,
+    targetPath: preferred,
+    resolvePkg: () => { throw new Error('not installed') },
+    exists: () => false,
+    downloadImpl: async () => {
+      networkCalls += 1
+      throw new Error('HTTP 404 (not found)')
+    },
+  }), /HTTP 404/)
+  assert.equal(networkCalls, 1)
+
+  const attemptedPaths = []
+  const resolved = await ensureHelperBinary({
+    platform: 'win32',
+    arch: 'x64',
+    env,
+    targetPath: preferred,
+    resolvePkg: () => { throw new Error('not installed') },
+    exists: () => false,
+    downloadImpl: async ({ targetPath }) => {
+      attemptedPaths.push(targetPath)
+      if (targetPath === preferred) {
+        throw Object.assign(new Error('permission denied'), { code: 'EACCES' })
+      }
+      return targetPath
+    },
+  })
+  assert.equal(attemptedPaths.length, 2)
+  assert.equal(attemptedPaths[0], preferred)
+  assert.notEqual(attemptedPaths[1], preferred)
+  assert.equal(resolved, attemptedPaths[1])
+
+  // When preferred is already the fallback path, preserve the original EACCES error.
+  await assert.rejects(() => ensureHelperBinary({
+    platform: 'win32',
+    arch: 'x64',
+    env,
+    targetPath: resolved,
+    resolvePkg: () => { throw new Error('not installed') },
+    exists: () => false,
+    downloadImpl: async () => {
+      throw Object.assign(new Error('EACCES: read-only cache'), { code: 'EACCES' })
+    },
+  }), /read-only cache/)
 })

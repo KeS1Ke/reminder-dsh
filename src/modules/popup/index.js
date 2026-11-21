@@ -28,11 +28,27 @@ function currentSound(config) {
   return customSoundPath() ?? defaultSound
 }
 
-/** Owner-only route for the optional toast sound. The file stays in the plugin data folder. */
-function attachSoundRoute(ctx, logger) {
-  ctx.inject(['connection'], scope => {
-    try {
-      return scope.connection.fetch.register({
+/** Owner-only routes for the optional toast sound and focused session-open handoff. */
+function attachRoutes(ctx, requests, logger) {
+  const cleanups = new Set()
+  const cleanup = () => {
+    for (const dispose of [...cleanups].reverse()) {
+      cleanups.delete(dispose)
+      dispose()
+    }
+  }
+  const fiber = ctx.inject(['connection'], scope => {
+    const routes = [
+      ['会话跳转路由', {
+        path: '/api/reminder-dsh/session-open', methods: ['GET'], requestBody: 'buffered',
+        async fetch(request) {
+          const acknowledgedId = new URL(request.url).searchParams.get('ack')
+          const open = await requests.take(acknowledgedId, request.signal)
+          const headers = { 'cache-control': 'no-store' }
+          return open ? Response.json(open, { headers }) : new Response(null, { status: 204, headers })
+        },
+      }],
+      ['提示音上传', {
         path: '/api/reminder-dsh/sound', methods: ['GET', 'POST', 'DELETE'], requestBody: 'buffered',
         async fetch(request) {
           const headers = { 'cache-control': 'no-store' }
@@ -55,31 +71,21 @@ function attachSoundRoute(ctx, logger) {
             return Response.json({ error: message }, { status: 400, headers })
           }
         },
-      })
-    } catch (error) {
-      logger.warn(`提示音上传不可用：${error instanceof Error ? error.message : String(error)}`)
+      }],
+    ]
+    for (const [label, route] of routes) {
+      try {
+        cleanups.add(scope.connection.fetch.register(route))
+      } catch (error) {
+        logger.warn(`${label}不可用：${error instanceof Error ? error.message : String(error)}`)
+      }
     }
+    return cleanup
   })
-}
-
-/** DSH's Fetch router admits only authenticated owner peers and forwards request cancellation. */
-function attachSessionOpenRoute(ctx, requests, logger) {
-  ctx.inject(['connection'], scope => {
-    try {
-      return scope.connection.fetch.register({
-        path: '/api/reminder-dsh/session-open', methods: ['GET'], requestBody: 'buffered',
-        async fetch(request) {
-          const acknowledgedId = new URL(request.url).searchParams.get('ack')
-          const open = await requests.take(acknowledgedId, request.signal)
-          const headers = { 'cache-control': 'no-store' }
-          return open ? Response.json(open, { headers }) : new Response(null, { status: 204, headers })
-        },
-      })
-    } catch (error) {
-      // Keep sending reminders when the host's session navigation route is unavailable.
-      logger.warn(`会话跳转路由不可用：${error instanceof Error ? error.message : String(error)}`)
-    }
-  })
+  return () => {
+    cleanup()
+    fiber.dispose()
+  }
 }
 
 /** Keep the popup configuration key for existing profiles. */
@@ -102,8 +108,7 @@ export function createPopupModule(ctx, config, notifier = createWindowsToast(con
     }),
     show: options => notifier.notify({ ...options, onOpen: openOf(options), sound: currentSound(config) }),
   })
-  attachSessionOpenRoute(ctx, opens, logger)
-  attachSoundRoute(ctx, logger)
+  const disposeRoutes = attachRoutes(ctx, opens, logger)
   return {
     notify: options => queue.enqueue(options),
     notifyApproval(options) {
@@ -120,6 +125,6 @@ export function createPopupModule(ctx, config, notifier = createWindowsToast(con
       if (!config.enabled.get()) approvals.abort()
       else if (approvals.signal.aborted) approvals = new AbortController()
     },
-    dispose() { queue.dispose(); approvals.abort(); opens.dispose(); notifier.dispose() },
+    dispose() { disposeRoutes(); queue.dispose(); approvals.abort(); opens.dispose(); notifier.dispose() },
   }
 }

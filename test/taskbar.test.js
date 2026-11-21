@@ -93,11 +93,93 @@ test('taskbar spawn and target lookup failures are reported', async () => {
   await assert.rejects(result, /任务栏辅助程序/)
 })
 
+test('taskbar early exit with stderr preserves the real failure when stdin hits EPIPE, and clean exit ignores EPIPE', async () => {
+  const h = rig(), first = h.notifier.notify()
+  h.child.stderr.write('未找到 DSH 窗口')
+  h.child.stdin.emit('error', Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }))
+  h.child.emit('close', 1)
+  await assert.rejects(first, /未找到 DSH 窗口/)
+
+  const clean = rig(), second = clean.notifier.notify()
+  clean.child.stdin.emit('error', Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }))
+  clean.child.emit('close', 0)
+  await second
+})
+
 test('taskbar disabled by default does not start a process', async () => {
   let calls = 0
   const module = createTaskbarModule(Config({}), { notify: () => { calls++ }, stop() {}, dispose() {} })
   await module.notify({})
   assert.equal(calls, 0)
+})
+
+test('concurrent taskbar notifications share a single async helper download and emit count 1 then 2', async () => {
+  const calls = []
+  let ensureCalls = 0, releaseEnsure
+  const notifier = createTaskbarNotifier(
+    { isEnabled: () => true, getWindowTitle: () => 'DSH' },
+    exe => {
+      const child = new EventEmitter()
+      child.stdin = new PassThrough()
+      child.stderr = new PassThrough()
+      child.kill = () => { child.killed = true; queueMicrotask(() => child.emit('close', null)) }
+      calls.push({ exe, child })
+      return child
+    },
+    {
+      resolve: () => undefined,
+      ensure: () => {
+        ensureCalls += 1
+        return new Promise(resolve => { releaseEnsure = resolve })
+      },
+    },
+  )
+
+  const first = notifier.notify()
+  const second = notifier.notify()
+  assert.equal(ensureCalls, 1)
+  releaseEnsure('C:\\fake\\dsh-reminder-helper.exe')
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(ensureCalls, 1)
+  assert.equal(calls.length, 1)
+  const sent = calls[0].child.stdin.read().toString('utf8').trim().split('\n').map(line => JSON.parse(line))
+  assert.deepEqual(sent, [
+    { hostPid: process.pid, windowTitle: 'DSH', count: 1, maxMinutes: 120 },
+    { type: 'set', count: 2 },
+  ])
+  calls[0].child.emit('close', 0)
+  await Promise.all([first, second])
+
+  let ensureFailCalls = 0, rejectEnsure
+  const failing = createTaskbarNotifier(
+    { isEnabled: () => true, getWindowTitle: () => 'DSH' },
+    () => { throw new Error('should not launch') },
+    {
+      resolve: () => undefined,
+      ensure: () => {
+        ensureFailCalls += 1
+        return new Promise((_, reject) => { rejectEnsure = reject })
+      },
+    },
+  )
+  const unhandled = []
+  const onUnhandled = reason => unhandled.push(reason)
+  process.on('unhandledRejection', onUnhandled)
+  try {
+    const a = failing.notify()
+    const b = failing.notify()
+    assert.equal(ensureFailCalls, 1)
+    rejectEnsure(new Error('download boom'))
+    const results = await Promise.allSettled([a, b])
+    assert.equal(results[0].status, 'rejected')
+    assert.equal(results[1].status, 'rejected')
+    assert.match(results[0].reason.message, /download boom/)
+    assert.match(results[1].reason.message, /download boom/)
+    await new Promise(resolve => setImmediate(resolve))
+    assert.deepEqual(unhandled, [])
+  } finally {
+    process.off('unhandledRejection', onUnhandled)
+  }
 })
 
 test('badge startup keeps queued count updates', { skip: process.platform !== 'win32' }, () => {

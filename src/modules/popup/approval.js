@@ -30,28 +30,32 @@ export function attachApprovalNotifications(ctx, notify) {
 
     // Forwarding to the gateway runs asynchronously. Leave DSH's answerer in charge of the request.
     setImmediate(() => {
-      if (signal.aborted) return
-      const event = [...gateway.pendingRemoteEvents.values()].find(item =>
-        item.frame?.event === 'approval/request' && item.source?.request === request && item.source.context?.subject === request.agent)
-      if (!event) return
-      const tool = excerpt(request.toolName, 64)
-      const description = request.reason
-      const reason = typeof description === 'string' && description.trim()
-        ? excerpt(description, 220) : '点击通知查看请求详情。'
-      void Promise.resolve().then(() => notify({
-        sessionId: session.id,
-        // The title stays the session title; the approval context moves into the body.
-        title: sessionTitleOf(ctx, session) ?? `需要审批 · ${tool}`,
-        message: `需要审批（${tool}）：${reason}`, signal,
-        onDecision(outcome) {
-          if (signal.aborted || request.agent.session !== session || approval.effectivePolicy(session) !== 'ask'
-            || gateway.pendingRemoteEvents.get(event.id) !== event
-            || (outcome !== 'allowed-once' && outcome !== 'rejected')) {
-            throw new Error('审批请求已失效，请回到 DSH 查看。')
-          }
-          gateway.settleRemoteEvent(event, { kind: 'result', value: outcome })
-        },
-      })).catch(error => {
+      Promise.resolve().then(() => {
+        if (signal.aborted) return
+        const event = [...gateway.pendingRemoteEvents.values()].find(item =>
+          item.frame?.event === 'approval/request' && item.source?.request === request && item.source.context?.subject === request.agent)
+        if (!event) return
+        const rawTool = typeof request.toolName === 'string' && request.toolName.trim()
+          ? request.toolName : String(request.toolName ?? '').trim() || 'tool'
+        const tool = excerpt(rawTool, 64)
+        const description = request.reason
+        const reason = typeof description === 'string' && description.trim()
+          ? excerpt(description, 220) : '点击通知查看请求详情。'
+        return notify({
+          sessionId: session.id,
+          // The title stays the session title; the approval context moves into the body.
+          title: sessionTitleOf(ctx, session) ?? `需要审批 · ${tool}`,
+          message: `需要审批（${tool}）：${reason}`, signal,
+          onDecision(outcome) {
+            if (signal.aborted || request.agent.session !== session || approval.effectivePolicy(session) !== 'ask'
+              || gateway.pendingRemoteEvents.get(event.id) !== event
+              || (outcome !== 'allowed-once' && outcome !== 'rejected')) {
+              throw new Error('审批请求已失效，请回到 DSH 查看。')
+            }
+            gateway.settleRemoteEvent(event, { kind: 'result', value: outcome })
+          },
+        })
+      }).catch(error => {
         if (!signal.aborted) logger.warn(`审批通知失败：${error instanceof Error ? error.message : String(error)}`)
       })
     })

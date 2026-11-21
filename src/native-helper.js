@@ -93,16 +93,26 @@ export function resolveHelperBinary({
   return undefined
 }
 
-async function fetchWithTimeout(fetchImpl, url, timeoutMs) {
+async function fetchWithTimeout(fetchImpl, url, timeoutMs, readBody) {
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
-  timer.unref?.()
-  try {
+  let timer
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const error = new Error(`下载超时 (${url})`)
+      controller.abort(error)
+      reject(error)
+    }, timeoutMs)
+    timer.unref?.()
+  })
+  const run = (async () => {
     const response = await fetchImpl(url, { redirect: 'follow', signal: controller.signal })
     if (!response.ok) {
       throw new Error(`HTTP ${response.status} (${url})`)
     }
-    return response
+    return await readBody(response)
+  })()
+  try {
+    return await Promise.race([run, timeout])
   } finally {
     clearTimeout(timer)
   }
@@ -116,11 +126,12 @@ export async function downloadHelperBinary({
   timeoutMs = 30_000,
 } = {}) {
   const { binaryUrl, shaUrl } = getHelperAssetUrls(version, repo)
-  const shaRes = await fetchWithTimeout(fetchImpl, shaUrl, timeoutMs)
-  const expectedSha = parseSha256(await shaRes.text())
+  const shaText = await fetchWithTimeout(fetchImpl, shaUrl, timeoutMs, response => response.text())
+  const expectedSha = parseSha256(shaText)
 
-  const binRes = await fetchWithTimeout(fetchImpl, binaryUrl, timeoutMs)
-  const buffer = Buffer.from(await binRes.arrayBuffer())
+  const buffer = Buffer.from(
+    await fetchWithTimeout(fetchImpl, binaryUrl, timeoutMs, response => response.arrayBuffer()),
+  )
   verifySha256(buffer, expectedSha)
 
   mkdirSync(dirname(targetPath), { recursive: true })
@@ -134,6 +145,8 @@ export async function downloadHelperBinary({
   }
   return targetPath
 }
+
+const writableErrors = new Set(['EACCES', 'EPERM', 'EROFS'])
 
 export async function ensureHelperBinary(options = {}) {
   const resolved = resolveHelperBinary(options)
@@ -149,12 +162,13 @@ export async function ensureHelperBinary(options = {}) {
     const version = options.version ?? getPackageVersion()
     const env = options.env ?? process.env
     const preferred = options.targetPath ?? getLocalPackageHelperPath()
+    const download = options.downloadImpl ?? downloadHelperBinary
     try {
-      return await downloadHelperBinary({ ...options, targetPath: preferred, version })
-    } catch {
+      return await download({ ...options, targetPath: preferred, version })
+    } catch (error) {
       const fallback = getCachedHelperPath({ version, env })
-      if (fallback === preferred) throw new Error('下载 Windows 提醒辅助程序失败')
-      return await downloadHelperBinary({ ...options, targetPath: fallback, version })
+      if (!writableErrors.has(error?.code) || fallback === preferred) throw error
+      return await download({ ...options, targetPath: fallback, version })
     }
   })().finally(() => {
     inflightDownload = undefined

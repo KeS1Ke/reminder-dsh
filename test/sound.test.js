@@ -70,6 +70,15 @@ test('a custom sound replaces the previous file in the plugin directory', () => 
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
 
+test('failing to remove the previous sound does not leave a second sound file on disk', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'reminder-sound-'))
+  try {
+    mkdirSync(join(dir, 'notification-sound.wav'), { recursive: true })
+    assert.throws(() => saveCustomSound('next.mp3', mp3Clip(10), dir), /.+/)
+    assert.equal(existsSync(join(dir, 'notification-sound.mp3')), false)
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
 test('the sound route stores a short clip and rejects a clip longer than five seconds', async t => {
   const dir = mkdtempSync(join(tmpdir(), 'reminder-sound-'))
   const previous = process.env.LOCALAPPDATA
@@ -137,4 +146,17 @@ test('unloading the plugin removes the sound and session routes', async () => {
   await ctx.fiber.dispose()
   popup.dispose()
   assert.deepEqual(removed.sort(), ['/api/reminder-dsh/session-open', '/api/reminder-dsh/sound'])
+})
+
+test('disposing the popup module directly removes both connection routes', async () => {
+  const ctx = new Context()
+  const removed = []
+  ctx.provide('llm', {})
+  ctx.provide('connection', { fetch: { register: route => () => { removed.push(route.path) } } })
+  const popup = createPopupModule(ctx, Config({ showSummary: false }), { notify() {}, dispose() {} })
+  await new Promise(resolve => setImmediate(resolve))
+  popup.dispose()
+  assert.deepEqual(removed.sort(), ['/api/reminder-dsh/session-open', '/api/reminder-dsh/sound'])
+  await ctx.fiber.dispose()
+  assert.equal(removed.length, 2)
 })

@@ -92,3 +92,32 @@ test('native approval fails closed after a policy change, abort or session switc
   h.answerInDsh('1', 'cancelled')
   assert.equal(await decision, 'cancelled')
 })
+
+test('malformed approval payload inside setImmediate is contained and logged', async t => {
+  const ctx = new Context()
+  t.after(() => ctx.fiber.dispose())
+  const warnings = [], notifications = []
+  ctx.logger.exporter({ export: msg => { if (msg.type === 'warn') warnings.push(msg) } })
+  const pendingRemoteEvents = new Map()
+  ctx.provide('approval', { effectivePolicy: () => 'ask' })
+  ctx.provide('typertGateway', { pendingRemoteEvents, settleRemoteEvent() {} })
+  attachApprovalNotifications(ctx, options => notifications.push(options))
+
+  const requestMissingTool = { agent: { session: { id: 's1' } }, toolName: undefined, reason: 'check' }
+  ctx.on('approval/request', request => {
+    pendingRemoteEvents.set('1', {
+      id: '1', frame: { event: 'approval/request' }, source: { request, context: { subject: request.agent } },
+    })
+    return new Promise(() => {})
+  })
+  void ctx.waterfall('approval/request', requestMissingTool, () => 'unavailable')
+  await flush()
+  assert.equal(notifications.length, 1)
+  assert.equal(notifications[0].title, '需要审批 · tool')
+
+  // Also ensure an unexpected throw inside setImmediate (e.g., broken gateway iterator) is caught and logged.
+  pendingRemoteEvents.values = () => { throw new Error('gateway corrupted') }
+  void ctx.waterfall('approval/request', { agent: { session: { id: 's2' } }, toolName: 'bash' }, () => 'unavailable')
+  await flush()
+  assert.ok(warnings.some(msg => String(msg.args[0]).includes('gateway corrupted')))
+})
